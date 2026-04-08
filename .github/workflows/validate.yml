@@ -1,0 +1,153 @@
+name: 验证编译配置
+
+on:
+  push:
+    paths: ['configs/**']
+  pull_request:
+    paths: ['configs/**']
+  workflow_dispatch:
+    inputs:
+      device:
+        description: '设备 ID'
+        required: false
+        default: ''
+      openwrt_repo:
+        description: 'OpenWrt 仓库'
+        default: 'K-Lrize/openwrt'
+        required: true
+      openwrt_ref:
+        description: '分支'
+        default: 'mediatek-mt3600be'
+        required: true
+
+jobs:
+  # ── 检测变更，构建设备矩阵 ──────────────────────────────
+  setup:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      openwrt_repo: ${{ steps.params.outputs.repo }}
+      openwrt_ref: ${{ steps.params.outputs.ref }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: 确定 OpenWrt 参数
+        id: params
+        run: |
+          echo "repo=${{ github.event.inputs.openwrt_repo || 'K-Lrize/openwrt' }}" >> "$GITHUB_OUTPUT"
+          echo "ref=${{ github.event.inputs.openwrt_ref || 'mediatek-mt3600be' }}" >> "$GITHUB_OUTPUT"
+
+      - name: 构建设备矩阵
+        id: build-matrix
+        run: |
+          if [[ -n "${{ github.event.inputs.device }}" ]]; then
+            # workflow_dispatch 手动指定设备
+            devices='["${{ github.event.inputs.device }}"]'
+
+          elif [[ "${{ github.event_name }}" == "push" || \
+                  "${{ github.event_name }}" == "pull_request" ]]; then
+            # 自动检测本次 push/PR 改动了哪些 configs/*.config
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              base="${{ github.event.pull_request.base.sha }}"
+            else
+              base="${{ github.event.before }}"
+            fi
+
+            # 防御：新分支或 force push 时 before 为全零 SHA
+            if [[ "$base" == "0000000000000000000000000000000000000000" || -z "$base" ]]; then
+              changed=$(ls configs/*.config 2>/dev/null \
+                        | sed 's|configs/||;s|\.config$||' \
+                        | jq -R . | jq -sc .)
+            else
+              changed=$(git diff --name-only "$base" HEAD -- 'configs/*.config' \
+                        | sed 's|configs/||;s|\.config$||' \
+                        | jq -R . | jq -sc .)
+            fi
+
+            # 防御：如果没检测到变更，验证全部
+            if [[ "$changed" == "[]" || -z "$changed" ]]; then
+              changed=$(ls configs/*.config 2>/dev/null \
+                        | sed 's|configs/||;s|\.config$||' \
+                        | jq -R . | jq -sc .)
+            fi
+            devices="$changed"
+
+          else
+            # 默认：验证全部
+            devices=$(ls configs/*.config 2>/dev/null \
+                      | sed 's|configs/||;s|\.config$||' \
+                      | jq -R . | jq -sc .)
+          fi
+
+          echo "matrix={\"device\":${devices}}" >> "$GITHUB_OUTPUT"
+          echo "将验证的设备: ${devices}"
+
+  # ── 并行验证各设备 ──────────────────────────────────────
+  validate:
+    needs: setup
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+      fail-fast: false
+    name: 验证 ${{ matrix.device }}
+
+    steps:
+      - name: 检出 OpenWrt 源码
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.setup.outputs.openwrt_repo }}
+          ref: ${{ needs.setup.outputs.openwrt_ref }}
+          fetch-depth: 1
+
+      - name: 检出配置仓库
+        uses: actions/checkout@v4
+        with:
+          path: build-config
+
+      - name: 安装最小依赖
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git libncurses-dev \
+            python3 python3-setuptools unzip
+
+      - name: 配置 feeds
+        run: |
+          FEEDS_FILE="build-config/configs/${{ matrix.device }}.feeds"
+          CUSTOM_FEEDS=()
+
+          if [[ -f "$FEEDS_FILE" ]]; then
+            echo "读取自定义 feeds: ${FEEDS_FILE}"
+            while IFS=' ' read -r name url branch; do
+              [[ -z "$name" || "$name" == \#* ]] && continue
+              branch="${branch:-main}"
+              echo "src-git ${name} ${url};${branch}" >> feeds.conf.default
+              CUSTOM_FEEDS+=("$name")
+              echo "  + ${name} (${url} @ ${branch})"
+            done < "$FEEDS_FILE"
+          else
+            echo "无自定义 feeds 文件，使用官方 feeds"
+          fi
+
+          ./scripts/feeds update -a 2>&1 | tail -5
+
+          for feed in "${CUSTOM_FEEDS[@]}"; do
+            echo "优先安装 feed: ${feed}"
+            ./scripts/feeds install -a -p "$feed"
+          done
+
+          ./scripts/feeds install -a
+
+      - name: 生成完整配置
+        run: |
+          cp "build-config/configs/${{ matrix.device }}.config" .config
+          make defconfig
+
+      - name: 验证配置
+        run: |
+          bash build-config/scripts/validate-config.sh \
+            "build-config/configs/${{ matrix.device }}.config" \
+            "${{ matrix.device }}"
