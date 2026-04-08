@@ -1,0 +1,3 @@
+# 格式: <feed_name> <git_url> [branch]
+# 官方 feeds 由 OpenWrt 源码自带，此处只声明额外的自定义 feeds
+passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git main
