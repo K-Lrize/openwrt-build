@@ -1,0 +1,112 @@
+name: Build OpenWrt Firmware
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: rolling
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'devices/**'
+      - 'common/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+      - '!.github/workflows/validate.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'devices/**'
+      - 'common/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+      - '!.github/workflows/validate.yml'
+  workflow_dispatch:
+    inputs:
+      openwrt_repo:
+        description: 'OpenWrt Repository'
+        default: 'openwrt/openwrt'
+      openwrt_ref:
+        description: 'OpenWrt Branch/Tag'
+        default: 'main'
+  schedule:
+    - cron: '0 0 * * 5'
+
+jobs:
+  # 阶段 Prepare: 分析 Git 变动
+  Prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      device_list: ${{ steps.set-matrix.outputs.device_list }}
+      has_builds: ${{ steps.set-matrix.outputs.has_builds }}
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Calculate Build Matrix
+        id: set-matrix
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/workflows/scripts/calculate-matrix.sh
+
+  # 阶段 Build: 分布式并行编译
+  Build:
+    needs: Prepare
+    if: needs.Prepare.outputs.has_builds == 'true'
+    uses: ./.github/workflows/reusable-build.yml
+    strategy:
+      fail-fast: false
+      matrix:
+        device: ${{ fromJSON(needs.Prepare.outputs.matrix) }}
+    with:
+      device: ${{ matrix.device }}
+      openwrt_repo: ${{ github.event.inputs.openwrt_repo || 'openwrt/openwrt' }}
+      openwrt_ref: ${{ github.event.inputs.openwrt_ref || 'main' }}
+
+  # 阶段 Release: 自动发布
+  Release:
+    needs: [Prepare, Build]
+    if: needs.Prepare.outputs.has_builds == 'true' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate Release Index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEVICE_LIST: ${{ needs.Prepare.outputs.device_list }}
+        run: |
+          bash .github/workflows/scripts/generate-release-index.sh \
+            artifacts \
+            "$RELEASE_TAG" \
+            release-index.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: OpenWrt Firmware
+          body_path: release-index.md
+          files: |
+            artifacts/**/*
+          overwrite_files: true
+          make_latest: true
