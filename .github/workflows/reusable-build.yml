@@ -156,10 +156,10 @@ jobs:
         run: |
           echo "Fast-forwarding cache timestamps to cheat Make..."
           if [ -d "build_dir/host" ]; then
-            find build_dir/host staging_dir/host -exec touch {} +
+            find build_dir/host staging_dir/host -type f -exec touch {} + 2>/dev/null || true
           fi
           if [ -d "build_dir/toolchain-*" ] || [ -d "staging_dir/toolchain-*" ]; then
-            find build_dir/toolchain-* staging_dir/toolchain-* -exec touch {} + 2>/dev/null || true
+            find build_dir/toolchain-* staging_dir/toolchain-* -type f -exec touch {} + 2>/dev/null || true
           fi
 
       - name: Build Host Tools
