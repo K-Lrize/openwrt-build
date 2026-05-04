@@ -21,7 +21,7 @@ uci commit system
 # 2. 网络接口配置
 # ==========================================
 # 修改 LAN IP
-uci set network.lan.ipaddr='10.0.0.1'
+uci set network.lan.ipaddr='10.0.0.1/24'
 
 # 创建访客网络接口
 uci set network.guest=interface
