@@ -152,6 +152,16 @@ jobs:
       - name: Download Sources
         run: make download -j8 || make download -j1 V=s
 
+      - name: Fix Cache Timestamps
+        run: |
+          echo "Fast-forwarding cache timestamps to cheat Make..."
+          if [ -d "build_dir/host" ]; then
+            find build_dir/host staging_dir/host -exec touch {} +
+          fi
+          if [ -d "build_dir/toolchain-*" ] || [ -d "staging_dir/toolchain-*" ]; then
+            find build_dir/toolchain-* staging_dir/toolchain-* -exec touch {} + 2>/dev/null || true
+          fi
+
       - name: Build Host Tools
         run: make tools/install -j$(nproc) || make tools/install -j1 V=s
 
