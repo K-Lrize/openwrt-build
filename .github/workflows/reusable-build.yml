@@ -19,6 +19,7 @@ jobs:
     env:
       DEVICE: ${{ inputs.device }}
       CONFIG_REPO_DIR: build-config
+      CCACHE_BASEDIR: ${{ github.workspace }} 
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
@@ -160,7 +161,7 @@ jobs:
       - name: Build Firmware
         run: |
           mkdir -p $CCACHE_DIR $SCCACHE_DIR
-          make -j$(nproc) || make -j1 V=s
+          make -j$(nproc) BUILD_LOG=1 || make -j1 V=s
           ccache -s
           "${SCCACHE_PATH:-sccache}" -s || true
 
@@ -176,6 +177,15 @@ jobs:
           paths=(staging_dir/host* staging_dir/toolchain-* build_dir/host* build_dir/toolchain-*)
           [ ${#paths[@]} -gt 0 ] && du -sh "${paths[@]}" || echo "none"
           echo "::endgroup::"
+
+      - name: Upload Build Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ inputs.device }}
+          path: logs/
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Organize Artifacts
         run: |
