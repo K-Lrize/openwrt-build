@@ -1,0 +1,77 @@
+name: "[Reusable] Firmware Package Compiler"
+
+# Reusable: build missing packages for one arch.
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        type: string
+        required: true
+      target_slug:
+        type: string
+        required: true
+      ref_slug:
+        type: string
+        required: true
+      owner_lc:
+        type: string
+        required: true
+      repo_name_lc:
+        type: string
+        required: true
+      paths:
+        description: 'Source directories to compile'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  Build-Custom-Patches:
+    name: Build packages
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout config
+        uses: actions/checkout@v6
+        with:
+          path: build-config
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compile packages
+        shell: bash
+        env:
+          SDK_IMAGE: ghcr.io/${{ inputs.owner_lc }}/${{ inputs.repo_name_lc }}:sdk-${{ inputs.target_slug }}-${{ inputs.ref_slug }}
+          PATHS: ${{ inputs.paths }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p tier3-outputs pkg-out
+
+          # Include all device configs so SDK sees required kmods.
+          : > combined.config
+          find build-config/devices/ -name ".config" -exec cat {} + >> combined.config
+
+          # Source dirs -> make targets -> SDK compile.
+          jq -r '.[]' <<< "$PATHS" | sed 's#$#/compile#' \
+            | bash build-config/scripts/build/compile-in-sdk.sh \
+                build-config "$SDK_IMAGE" pkg-out __all__ combined.config
+
+          # Flatten packages for this arch.
+          find "pkg-out/packages/${ARCH}" -type f \( -name '*.ipk' -o -name '*.apk' \) \
+            -exec cp -v {} tier3-outputs/ \; 2>/dev/null || true
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: tier3-ipks-${{ inputs.arch }}
+          path: tier3-outputs/
+          retention-days: 1

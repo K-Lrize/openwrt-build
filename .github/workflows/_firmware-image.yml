@@ -1,0 +1,152 @@
+name: "[Reusable] Firmware Image Generator"
+
+# Reusable: assemble one device image.
+
+on:
+  workflow_call:
+    inputs:
+      device:
+        type: string
+        required: true
+      target_slug:
+        type: string
+        required: true
+      ref_slug:
+        type: string
+        required: true
+      owner_lc:
+        type: string
+        required: true
+      repo_name_lc:
+        type: string
+        required: true
+      arch:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  Assemble-Firmware:
+    name: Assemble image
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout config
+        uses: actions/checkout@v6
+        with:
+          path: build-config
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download fresh packages
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: tier3-ipks-${{ inputs.arch }}
+          path: tier3-packages/
+
+      - name: Download package pool
+        shell: bash
+        env:
+          POOL_IMAGE: ghcr.io/${{ inputs.owner_lc }}/${{ inputs.repo_name_lc }}:packages-${{ inputs.ref_slug }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          mkdir -p tier2-packages
+          docker pull "$POOL_IMAGE" 2>/dev/null || { sleep 10; docker pull "$POOL_IMAGE" 2>/dev/null; } || true
+          cid="$(docker create "$POOL_IMAGE" 2>/dev/null)" || cid=""
+          if [ -n "$cid" ]; then
+            docker cp "${cid}:/packages/${ARCH}/." tier2-packages/ 2>/dev/null || true
+            docker rm "$cid" >/dev/null 2>&1 || true
+          else
+            echo "::warning::Package pool ${POOL_IMAGE} is unavailable."
+          fi
+
+      - name: Assemble image
+        shell: bash
+        env:
+          IB_IMAGE: ghcr.io/${{ inputs.owner_lc }}/${{ inputs.repo_name_lc }}:ib-${{ inputs.target_slug }}-${{ inputs.ref_slug }}
+          DEVICE: ${{ inputs.device }}
+        run: |
+          set -euo pipefail
+          BUILD_CONFIG="$GITHUB_WORKSPACE/build-config"
+          source "$BUILD_CONFIG/scripts/lib/extract-config.sh"
+
+          mkdir -p unified_repo bin-targets bin/outputs
+          find tier2-packages/ tier3-packages/ -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp -v {} unified_repo/ \; 2>/dev/null || true
+
+          # Allow the container builder user to write outputs.
+          sudo chmod -R 777 "$GITHUB_WORKSPACE"
+
+          DEVICE_CONFIG="$BUILD_CONFIG/devices/${DEVICE}/.config"
+          PROFILE=$(extract_profile "$DEVICE_CONFIG")
+          PACKAGES=$(extract_packages "$DEVICE_CONFIG" | tr '\n' ' ')
+
+          # Script executed inside ImageBuilder.
+          cat > run-ib.sh << 'EOF'
+          set -euo pipefail
+          DEVICE="$1"
+          PROFILE="$2"
+          PACKAGES="$3"
+          cd /home/builder
+
+          echo "::group::Local package index"
+          mkdir -p /tmp/local_repo
+          cp /tmp/unified_repo/* /tmp/local_repo/ 2>/dev/null || true
+          if [ -n "$(ls -A /tmp/local_repo 2>/dev/null)" ]; then
+            if command -v apk >/dev/null; then
+              apk mkndx -o /tmp/local_repo/APKINDEX.tar.gz /tmp/local_repo/*.apk 2>/dev/null || true
+            fi
+            if [ -f "./scripts/ipkg-make-index.sh" ]; then
+              ./scripts/ipkg-make-index.sh /tmp/local_repo > /tmp/local_repo/Packages
+              gzip -9nc /tmp/local_repo/Packages > /tmp/local_repo/Packages.gz
+            fi
+            # Local packages must override upstream feeds.
+            sed -i '1i src/gz local file:///tmp/local_repo' repositories.conf
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Merge files"
+          bash /build-config/scripts/build/merge-assets.sh "${DEVICE}"
+          echo "::endgroup::"
+
+          echo "::group::ImageBuilder"
+          make image PROFILE="$PROFILE" PACKAGES="$PACKAGES" FILES="files/"
+          echo "::endgroup::"
+
+          cp -ra bin/targets/* /tmp/bin-targets/
+          EOF
+
+          docker pull "$IB_IMAGE" || { sleep 10; docker pull "$IB_IMAGE"; }
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/unified_repo:/tmp/unified_repo:ro" \
+            -v "$BUILD_CONFIG:/build-config:ro" \
+            -v "$GITHUB_WORKSPACE/bin-targets:/tmp/bin-targets" \
+            -v "$GITHUB_WORKSPACE/run-ib.sh:/run-ib.sh:ro" \
+            "$IB_IMAGE" bash /run-ib.sh "$DEVICE" "$PROFILE" "$PACKAGES"
+
+      - name: Collect outputs
+        shell: bash
+        run: |
+          output_dir="bin/outputs"
+          mkdir -p "${output_dir}"
+          find bin-targets/ -type f \( -name "*sysupgrade*" -o -name "*factory*" -o -name "*.manifest" -o -name "profiles.json" \) | while read -r file; do
+            filename=$(basename "$file")
+            cp -v "$file" "${output_dir}/${{ inputs.device }}-${filename}"
+          done
+          bash build-config/scripts/ci/checksums.sh "${output_dir}"
+          mv "${output_dir}/sha256sums.txt" "${output_dir}/${{ inputs.device }}-sha256sums.txt"
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ inputs.device }}
+          path: bin/outputs/*
+          if-no-files-found: error
+          retention-days: 3

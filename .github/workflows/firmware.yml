@@ -1,0 +1,203 @@
+name: "[Build] Incremental Firmware"
+
+# Incremental firmware build and release.
+
+permissions:
+  contents: write
+  packages: write
+  actions: read
+
+env:
+  RELEASE_TAG: rolling
+  DEFAULT_OPENWRT_REF: main
+  OPENWRT_REPO: K-Lrize/openwrt
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'devices/**'
+      - 'common/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+    inputs:
+      openwrt_ref:
+        description: 'OpenWrt ref'
+        default: 'main'
+
+jobs:
+  Initialize:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    outputs:
+      device_matrix:    ${{ steps.matrix.outputs.device_matrix }}
+      device_meta:      ${{ steps.matrix.outputs.device_meta }}
+      has_builds:       ${{ steps.matrix.outputs.has_builds }}
+      owner_lc:         ${{ steps.slugs.outputs.owner_lc }}
+      repo_name_lc:     ${{ steps.slugs.outputs.repo_name_lc }}
+      ref_slug:         ${{ steps.slugs.outputs.ref_slug }}
+      openwrt_ref:      ${{ steps.slugs.outputs.openwrt_ref }}
+      openwrt_repo:     ${{ steps.slugs.outputs.openwrt_repo }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build matrix
+        id: matrix
+        run: bash scripts/ci/calculate-matrix.sh
+
+      - name: Compute names
+        id: slugs
+        shell: bash
+        run: |
+          source scripts/lib/slugify.sh
+          openwrt_ref="${{ inputs.openwrt_ref || env.DEFAULT_OPENWRT_REF }}"
+          owner_lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          repo_name_lc=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')
+
+          {
+            echo "openwrt_ref=${openwrt_ref}"
+            echo "openwrt_repo=${{ env.OPENWRT_REPO }}"
+            echo "ref_slug=$(slugify "$openwrt_ref")"
+            echo "owner_lc=${owner_lc}"
+            echo "repo_name_lc=${repo_name_lc}"
+          } >> "$GITHUB_OUTPUT"
+
+  Analyze-Diff:
+    name: Analyze packages
+    needs: Initialize
+    if: needs.Initialize.outputs.has_builds == 'true'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        device: ${{ fromJSON(needs.Initialize.outputs.device_matrix) }}
+    steps:
+      - name: Checkout config
+        uses: actions/checkout@v6
+        with:
+          path: build-config
+
+      - name: Checkout OpenWrt
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ needs.Initialize.outputs.openwrt_repo }}
+          ref: ${{ needs.Initialize.outputs.openwrt_ref }}
+          path: openwrt
+          fetch-depth: 1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find missing packages
+        id: diff
+        shell: bash
+        env:
+          OWNER_LC: ${{ needs.Initialize.outputs.owner_lc }}
+          REPO_NAME_LC: ${{ needs.Initialize.outputs.repo_name_lc }}
+          REF_SLUG: ${{ needs.Initialize.outputs.ref_slug }}
+        run: |
+          target_slug=$(source build-config/scripts/lib/slugify.sh && slugify "${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].target }}")
+          PREFIX="ghcr.io/${OWNER_LC}/${REPO_NAME_LC}"
+          IB_IMAGE="${PREFIX}:ib-${target_slug}-${REF_SLUG}"
+          POOL_IMAGE="${PREFIX}:packages-${REF_SLUG}"
+
+          bash build-config/scripts/ci/analyze-diff.sh \
+            "openwrt" \
+            "build-config/devices/${{ matrix.device }}/.config" \
+            "$IB_IMAGE" \
+            "$POOL_IMAGE" \
+            "${{ matrix.device }}.json"
+
+      - name: Upload package diff
+        uses: actions/upload-artifact@v7
+        with:
+          name: missing-info-${{ matrix.device }}
+          path: ${{ matrix.device }}.json
+
+  Aggregate-Patches:
+    name: Merge package diffs
+    needs: [Initialize, Analyze-Diff]
+    runs-on: ubuntu-24.04
+    outputs:
+      arch_paths_matrix: ${{ steps.merge.outputs.matrix }}
+    steps:
+      - name: Checkout config
+        uses: actions/checkout@v6
+
+      - name: Download package diffs
+        uses: actions/download-artifact@v8
+        with:
+          pattern: missing-info-*
+          path: all-missing/
+          merge-multiple: true
+
+      - name: Merge by arch
+        id: merge
+        shell: bash
+        run: |
+          bash scripts/ci/merge-missing-info.sh \
+            all-missing \
+            '${{ needs.Initialize.outputs.device_meta }}'
+
+  Compile-Patches:
+    name: Compile packages
+    needs: [Initialize, Aggregate-Patches]
+    if: needs.Aggregate-Patches.outputs.arch_paths_matrix != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        arch_data: ${{ fromJSON(needs.Aggregate-Patches.outputs.arch_paths_matrix) }}
+    uses: ./.github/workflows/_firmware-packages.yml
+    with:
+      arch: ${{ matrix.arch_data.key }}
+      paths: ${{ toJSON(matrix.arch_data.value) }}
+      target_slug: ${{ matrix.arch_data.target_slug }}
+      ref_slug: ${{ needs.Initialize.outputs.ref_slug }}
+      owner_lc: ${{ needs.Initialize.outputs.owner_lc }}
+      repo_name_lc: ${{ needs.Initialize.outputs.repo_name_lc }}
+
+  Assemble-Firmware:
+    name: Assemble firmware
+    needs: [Initialize, Compile-Patches]
+    if: always() && needs.Initialize.outputs.has_builds == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        device: ${{ fromJSON(needs.Initialize.outputs.device_matrix) }}
+    uses: ./.github/workflows/_firmware-image.yml
+    with:
+      device: ${{ matrix.device }}
+      target_slug: ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].target_slug }}
+      ref_slug: ${{ needs.Initialize.outputs.ref_slug }}
+      owner_lc: ${{ needs.Initialize.outputs.owner_lc }}
+      repo_name_lc: ${{ needs.Initialize.outputs.repo_name_lc }}
+      arch: ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].arch }}
+
+  Publish-Release:
+    name: Publish release
+    needs: [Initialize, Assemble-Firmware]
+    if: always() && needs.Initialize.outputs.has_builds == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download firmware
+        uses: actions/download-artifact@v8
+        with:
+          pattern: firmware-*
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Update rolling release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: artifacts/**/*
+          prerelease: true
+          make_latest: true
