@@ -1,0 +1,78 @@
+# Global package pool for the SDK build.
+#
+# 这里只列「用户态」包：pool 轨在 SDK 容器里逐个 make package/<name>/compile，
+# 每个非注释条目都会消耗 CI 时间（scripts/ci/select-pool-chunk.sh 把列表切成
+# chunk 并发编译）。
+#
+# 不要在这里写 kmod-*：内核模块没有 package/kmod-xxx/compile 这种粒度，且
+# SDK 的内核 .config 已固化——需要的内核模块请在 common/base-config 里以 =m 声明，
+# 由完整 buildroot 编进 ImageBuilder。select-pool-chunk.sh 会跳过任何 kmod-* 并告警。
+
+# --- 网络 / 防火墙 工具 ---
+nftables-json
+wget-ssl
+conntrack
+
+# --- IPv6 / VPN ---
+odhcp6c
+odhcpd-ipv6only
+wireguard-tools
+luci-proto-wireguard
+
+# --- USB / 移动网络 ---
+usbutils
+libimobiledevice
+modemmanager
+luci-proto-modemmanager
+usb-modeswitch
+libqmi
+libmbim
+
+# --- SQM / DNS / 服务 ---
+sqm-scripts
+luci-app-sqm
+smartdns
+luci-app-smartdns
+sing-box
+banip
+luci-app-banip
+acme
+luci-app-acme
+rsync
+wifischedule
+luci-app-wifischedule
+wpad-openssl
+
+# --- CLI / 诊断 ---
+tmux
+jq
+ncdu
+lsof
+tcpdump
+socat
+drill
+git
+git-http
+iperf3
+openssh-sftp-server
+irqbalance
+logrotate
+
+# --- 监控 ---
+nlbwmon
+luci-app-nlbwmon
+prometheus-node-exporter-lua
+
+# --- LuCI ---
+luci-base
+luci-mod-admin-full
+luci-app-uhttpd
+
+# --- 维护 / 其它 ---
+watchcat
+luci-app-watchcat
+luci-app-wol
+etherwake
+luci-app-upnp
+luci-app-ddns
+ddns-scripts
