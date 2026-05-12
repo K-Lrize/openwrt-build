@@ -1,0 +1,8 @@
+FROM scratch
+# Global Package Pool 镜像：纯数据镜像，只装预编译的扩展包 + 索引 + 全局清单。
+# 由 scripts/ci/finalize-pool.sh 构建；消费方 (analyze-diff.sh / _firmware-image.yml)
+# 用 `docker create` + `docker cp` 取内容 (FROM scratch 无 shell)。
+#   /packages/<arch>/<feed>/*.ipk|*.apk + Packages(.gz) / APKINDEX.tar.gz
+#   /manifests/global-manifest.txt   (换行分隔的去重包名，去版本/架构后缀)
+COPY pool/ /packages/
+COPY manifests/ /manifests/

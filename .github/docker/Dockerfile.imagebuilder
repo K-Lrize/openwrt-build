@@ -1,0 +1,45 @@
+# ImageBuilder image: contains pre-compiled kernel + all upstream feed ipks +
+# minimal Makefile system that supports `make image` (NOT `make package/X/compile`).
+# Consumed by .github/workflows/_firmware-image.yml to assemble final firmware images.
+#
+# Build context: scripts/ci/prepare-docker-context.sh extracts the IB tarball
+#                into ./ib-root/ + ./manifests/ before _base-target.yml runs `docker build`.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    FORCE_UNSAFE_CONFIGURE=1
+
+# ImageBuilder runtime deps. Slimmer than SDK — no compiler toolchain needed
+# because IB only assembles ipks, never compiles C/C++.
+RUN apt-get update -q && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        file \
+        gawk \
+        gettext \
+        git \
+        libncurses-dev \
+        perl \
+        python3 \
+        rsync \
+        signify-openbsd \
+        unzip \
+        wget \
+        xz-utils \
+        zlib1g \
+        zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /home/builder
+COPY ib-root/ /home/builder/
+
+# Manifest of ipk names already bundled into this IB tarball.
+# 新架构：统一使用 /manifests 目录存放清单
+COPY manifests/ /manifests/
+
+# _firmware-image.yml 在 IB 容器里会:
+#   1. 把 Tier 2 (pool 镜像) + Tier 3 (本次增量编的 ipk) 喂进本地私服源
+#   2. 重建 Packages.gz / APKINDEX，并把本地源插到 repositories.conf 第一行
+#   3. make image PROFILE=... PACKAGES="..." FILES=files/
+CMD ["bash"]
