@@ -1,0 +1,115 @@
+name: "[CI] Validate Configuration"
+
+on:
+  push:
+    paths:
+      - 'devices/**/.config'
+      - 'devices/**/feeds.conf'
+      - 'common/feeds.conf'
+  pull_request:
+    paths:
+      - 'devices/**/.config'
+      - 'devices/**/feeds.conf'
+      - 'common/feeds.conf'
+  workflow_dispatch:
+    inputs:
+      device:
+        description: 'Device ID, empty for all'
+        required: false
+        default: ''
+      openwrt_repo:
+        description: 'OpenWrt repo'
+        default: 'K-Lrize/openwrt'
+        required: true
+      openwrt_ref:
+        description: 'OpenWrt ref'
+        default: '2026-05-03'
+        required: true
+
+jobs:
+  Prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      device_matrix: ${{ steps.set-matrix.outputs.device_matrix }}
+      has_builds: ${{ steps.set-matrix.outputs.has_builds }}
+    steps:
+      - name: Checkout config
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build matrix
+        id: set-matrix
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DEVICE_OVERRIDE: ${{ github.event.inputs.device }}
+        run: |
+          if [ -n "$DEVICE_OVERRIDE" ]; then
+            echo "device_matrix=[\"$DEVICE_OVERRIDE\"]" >> $GITHUB_OUTPUT
+            echo "has_builds=true" >> $GITHUB_OUTPUT
+          else
+            bash scripts/ci/calculate-matrix.sh
+          fi
+
+  Validate:
+    needs: Prepare
+    if: needs.Prepare.outputs.has_builds == 'true'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        device: ${{ fromJSON(needs.Prepare.outputs.device_matrix) }}
+    name: ${{ matrix.device }}
+    env:
+      CONFIG_REPO_DIR: build-config
+
+    steps:
+      - name: Checkout OpenWrt
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.event.inputs.openwrt_repo || 'K-Lrize/openwrt' }}
+          ref: ${{ github.event.inputs.openwrt_ref || '2026-05-03' }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout config
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.CONFIG_REPO_DIR }}
+          persist-credentials: false
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git libncurses-dev \
+            python3 python3-setuptools unzip jq
+
+      - name: Prepare feeds
+        run: |
+          set -o pipefail
+          bash "${CONFIG_REPO_DIR}/scripts/build/prepare-feeds.sh" "${{ matrix.device }}"
+          cp "${CONFIG_REPO_DIR}/devices/${{ matrix.device }}/.config" .config
+
+      - name: Generate config
+        run: |
+          echo "CONFIG_CCACHE=n" >> .config
+          echo "CONFIG_RUST_SCCACHE=n" >> .config
+          
+          echo "::group::Seed .config"
+          cat .config
+          echo "::endgroup::"
+          
+          make defconfig
+          
+          echo "::group::Final .config"
+          cat .config
+          echo "::endgroup::"
+
+      - name: Validate config
+        run: |
+          set -o pipefail
+          bash "${CONFIG_REPO_DIR}/scripts/ci/validate-config.sh" "${{ matrix.device }}"

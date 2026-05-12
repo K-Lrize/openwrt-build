@@ -1,0 +1,284 @@
+name: "[Reusable] Target Base Builder"
+
+# Reusable: build SDK, ImageBuilder, and package-pool chunks.
+
+on:
+  workflow_call:
+    inputs:
+      openwrt_repo:
+        type: string
+        required: true
+      openwrt_ref:
+        type: string
+        required: true
+      target:
+        type: string
+        required: true
+    outputs:
+      sdk_image:
+        value: ${{ jobs.Push-Base-Images.outputs.sdk_image }}
+      ib_image:
+        value: ${{ jobs.Push-Base-Images.outputs.ib_image }}
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  Build-Base-Infrastructure:
+    name: Build base
+    runs-on: ubuntu-24.04
+    outputs:
+      sdk_image:   ${{ steps.slugs.outputs.sdk_image }}
+      ib_image:    ${{ steps.slugs.outputs.ib_image }}
+      target_slug: ${{ steps.slugs.outputs.target_slug }}
+      ref_slug:    ${{ steps.slugs.outputs.ref_slug }}
+      owner_lc:    ${{ steps.slugs.outputs.owner_lc }}
+      arch:        ${{ steps.slugs.outputs.arch }}
+
+    steps:
+      - name: Free disk
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev \
+            libssl-dev python3-setuptools rsync unzip zlib1g-dev \
+            file wget qemu-utils ccache jq zstd device-tree-compiler python3-pyelftools
+
+      - name: Checkout OpenWrt
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.openwrt_repo }}
+          ref: ${{ inputs.openwrt_ref }}
+          fetch-depth: 1
+
+      - name: Checkout config
+        uses: actions/checkout@v6
+        with:
+          path: build-config
+
+      - name: Compute names
+        id: slugs
+        shell: bash
+        run: |
+          source "build-config/scripts/lib/slugify.sh"
+          target_slug=$(slugify "${{ inputs.target }}")
+          ref_slug=$(slugify "${{ inputs.openwrt_ref }}")
+          owner_lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          repo_name_lc=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')
+          
+          {
+            echo "target_slug=${target_slug}"
+            echo "ref_slug=${ref_slug}"
+            echo "owner_lc=${owner_lc}"
+            echo "repo_name_lc=${repo_name_lc}"
+          } >> "$GITHUB_OUTPUT"
+          
+          prefix="ghcr.io/${owner_lc}/${repo_name_lc}"
+          echo "sdk_image=${prefix}:sdk-${target_slug}-${ref_slug}" >> "$GITHUB_OUTPUT"
+          echo "ib_image=${prefix}:ib-${target_slug}-${ref_slug}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare feeds
+        shell: bash
+        run: bash build-config/scripts/build/prepare-feeds.sh
+
+      - name: Configure base
+        shell: bash
+        run: |
+          target_main=$(echo "${{ inputs.target }}" | cut -d'/' -f1)
+          target_sub=$(echo "${{ inputs.target }}" | cut -d'/' -f2)
+          
+          cat > .config <<EOF
+          CONFIG_TARGET_${target_main}=y
+          CONFIG_TARGET_${target_main}_${target_sub}=y
+          CONFIG_DEVEL=y
+          CONFIG_SDK=y
+          CONFIG_IB=y
+          CONFIG_IB_STANDALONE=y
+          EOF
+
+          # Add shared base config.
+          if [ -f build-config/common/base-config ]; then
+            echo "Adding common/base-config..."
+            cat build-config/common/base-config >> .config
+          fi
+          
+          make defconfig
+
+      - name: Download sources
+        run: |
+          if ! make download -j8; then
+            echo "::warning::Download failed; retrying single-threaded."
+            make download -j1 V=s
+          fi
+
+      - name: Build tools
+        run: |
+          if ! make tools/install -j$(nproc) -k; then
+            echo "::warning::Tools build failed; retrying single-threaded."
+            make tools/install -j1 V=s
+          fi
+
+      - name: Build toolchain
+        run: |
+          if ! make toolchain/install -j$(nproc) -k; then
+            echo "::warning::Toolchain build failed; retrying single-threaded."
+            make toolchain/install -j1 V=s
+          fi
+
+      - name: Build kernel
+        run: |
+          if ! make target/linux/compile -j$(nproc) -k; then
+            echo "::warning::Kernel build failed; retrying single-threaded."
+            make target/linux/compile -j1 V=s
+          fi
+
+      - name: Build packages
+        run: |
+          if ! make package/compile -j$(nproc) -k; then
+            echo "::warning::Package compile failed; retrying single-threaded."
+            make package/compile -j1 V=s
+          fi
+
+      - name: Install packages
+        run: |
+          if ! make package/install -j1; then
+            echo "::warning::Package install failed; retrying verbose."
+            make package/install -j1 V=s
+          fi
+
+      - name: Install kernel
+        run: |
+          if ! make target/linux/install -j$(nproc) -k; then
+             make target/linux/install -j1 V=s
+          fi
+
+      - name: Build SDK
+        run: |
+          if ! make target/sdk/install -j$(nproc) -k; then
+            echo "::warning::SDK build failed; retrying single-threaded."
+            make target/sdk/install -j1 V=s
+          fi
+
+      - name: Build ImageBuilder
+        run: |
+          if ! make target/imagebuilder/install -j$(nproc) -k; then
+            echo "::warning::ImageBuilder build failed; retrying verbose."
+            make target/imagebuilder/install -j1 V=s
+          fi
+
+      - name: Upload base tarballs
+        uses: actions/upload-artifact@v7
+        with:
+          name: infrastructure-${{ steps.slugs.outputs.target_slug }}
+          path: |
+            bin/targets/**/openwrt-sdk-*.tar.*
+            bin/targets/**/openwrt-imagebuilder-*.tar.*
+          retention-days: 1
+
+  Push-Base-Images:
+    name: Push base images
+    needs: Build-Base-Infrastructure
+    runs-on: ubuntu-24.04
+    outputs:
+      sdk_image:   ${{ needs.Build-Base-Infrastructure.outputs.sdk_image }}
+      ib_image:    ${{ needs.Build-Base-Infrastructure.outputs.ib_image }}
+      target_slug: ${{ needs.Build-Base-Infrastructure.outputs.target_slug }}
+    steps:
+      - name: Checkout OpenWrt
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.openwrt_repo }}
+          ref: ${{ inputs.openwrt_ref }}
+          fetch-depth: 1
+
+      - name: Checkout config
+        uses: actions/checkout@v6
+        with:
+          path: build-config
+
+      - name: Download base tarballs
+        uses: actions/download-artifact@v8
+        with:
+          name: infrastructure-${{ needs.Build-Base-Infrastructure.outputs.target_slug }}
+          path: bin/targets
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare image context
+        shell: bash
+        run: |
+          bash build-config/scripts/ci/prepare-docker-context.sh \
+            "build-config" \
+            "bin/targets"
+
+      - name: Push images
+        shell: bash
+        run: |
+          docker build -t ${{ needs.Build-Base-Infrastructure.outputs.ib_image }} docker-ib/
+          docker build -t ${{ needs.Build-Base-Infrastructure.outputs.sdk_image }} docker-sdk/
+          docker push ${{ needs.Build-Base-Infrastructure.outputs.ib_image }}
+          docker push ${{ needs.Build-Base-Infrastructure.outputs.sdk_image }}
+
+  Build-Global-Pool:
+    name: Build package pool
+    needs: Push-Base-Images
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [0, 1, 2, 3]
+    steps:
+      - name: Checkout config
+        uses: actions/checkout@v6
+        with:
+          path: build-config
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compile pool chunk
+        shell: bash
+        env:
+          SDK_IMAGE: ${{ needs.Push-Base-Images.outputs.sdk_image }}
+          CHUNK_ID: ${{ matrix.chunk }}
+        run: |
+          mkdir -p pool-out
+          bash build-config/scripts/ci/select-pool-chunk.sh build-config "$CHUNK_ID" 4 \
+            | bash build-config/scripts/build/compile-in-sdk.sh build-config "$SDK_IMAGE" pool-out ""
+
+      - name: Check failures
+        shell: bash
+        run: |
+          if [ -f pool-out/.failed ]; then
+            echo "::error::Package build failures:"
+            cat pool-out/.failed
+            exit 1
+          fi
+
+      - name: Upload pool chunk
+        uses: actions/upload-artifact@v7
+        with:
+          name: pool-chunk-${{ needs.Push-Base-Images.outputs.target_slug }}-${{ matrix.chunk }}
+          path: pool-out/packages/
