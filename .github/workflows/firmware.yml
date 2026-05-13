@@ -10,7 +10,7 @@ permissions:
 env:
   RELEASE_TAG: rolling
   DEFAULT_OPENWRT_REF: main
-  OPENWRT_REPO: K-Lrize/openwrt
+  DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
 
 on:
   push:
@@ -22,6 +22,9 @@ on:
       - '.github/workflows/**'
   workflow_dispatch:
     inputs:
+      openwrt_repo:
+        description: 'OpenWrt repo'
+        default: 'K-Lrize/openwrt'
       openwrt_ref:
         description: 'OpenWrt ref'
         default: 'main'
@@ -31,38 +34,34 @@ jobs:
     name: Prepare
     runs-on: ubuntu-24.04
     outputs:
-      device_matrix:    ${{ steps.matrix.outputs.device_matrix }}
-      device_meta:      ${{ steps.matrix.outputs.device_meta }}
-      has_builds:       ${{ steps.matrix.outputs.has_builds }}
-      owner_lc:         ${{ steps.slugs.outputs.owner_lc }}
-      repo_name_lc:     ${{ steps.slugs.outputs.repo_name_lc }}
-      ref_slug:         ${{ steps.slugs.outputs.ref_slug }}
-      openwrt_ref:      ${{ steps.slugs.outputs.openwrt_ref }}
-      openwrt_repo:     ${{ steps.slugs.outputs.openwrt_repo }}
+      device_matrix:   ${{ steps.matrix.outputs.device_matrix }}
+      device_meta:     ${{ steps.matrix.outputs.device_meta }}
+      has_builds:      ${{ steps.matrix.outputs.has_builds }}
+      pool_image:      ${{ steps.matrix.outputs.pool_image }}
+      source_slug:     ${{ steps.matrix.outputs.source_slug }}
+      openwrt_ref:     ${{ steps.echo.outputs.openwrt_ref }}
+      openwrt_repo:    ${{ steps.echo.outputs.openwrt_repo }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Build matrix
-        id: matrix
-        run: bash scripts/ci/calculate-matrix.sh
-
-      - name: Compute names
-        id: slugs
+      - name: Echo source inputs
+        id: echo
         shell: bash
         run: |
-          source scripts/lib/slugify.sh
           openwrt_ref="${{ inputs.openwrt_ref || env.DEFAULT_OPENWRT_REF }}"
-          owner_lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
-          repo_name_lc=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')
-
+          openwrt_repo="${{ inputs.openwrt_repo || env.DEFAULT_OPENWRT_REPO }}"
           {
             echo "openwrt_ref=${openwrt_ref}"
-            echo "openwrt_repo=${{ env.OPENWRT_REPO }}"
-            echo "ref_slug=$(slugify "$openwrt_ref")"
-            echo "owner_lc=${owner_lc}"
-            echo "repo_name_lc=${repo_name_lc}"
+            echo "openwrt_repo=${openwrt_repo}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Build matrix
+        id: matrix
+        env:
+          OPENWRT_REPO: ${{ steps.echo.outputs.openwrt_repo }}
+          OPENWRT_REF:  ${{ steps.echo.outputs.openwrt_ref }}
+        run: bash scripts/ci/calculate-matrix.sh
 
   Analyze-Diff:
     name: Analyze packages
@@ -79,14 +78,6 @@ jobs:
         with:
           path: build-config
 
-      - name: Checkout OpenWrt
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ needs.Initialize.outputs.openwrt_repo }}
-          ref: ${{ needs.Initialize.outputs.openwrt_ref }}
-          path: openwrt
-          fetch-depth: 1
-
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -98,21 +89,15 @@ jobs:
         id: diff
         shell: bash
         env:
-          OWNER_LC: ${{ needs.Initialize.outputs.owner_lc }}
-          REPO_NAME_LC: ${{ needs.Initialize.outputs.repo_name_lc }}
-          REF_SLUG: ${{ needs.Initialize.outputs.ref_slug }}
+          IB_IMAGE:   ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_image }}
+          POOL_IMAGE: ${{ needs.Initialize.outputs.pool_image }}
+          DEVICE:     ${{ matrix.device }}
         run: |
-          target_slug=$(source build-config/scripts/lib/slugify.sh && slugify "${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].target }}")
-          PREFIX="ghcr.io/${OWNER_LC}/${REPO_NAME_LC}"
-          IB_IMAGE="${PREFIX}:ib-${target_slug}-${REF_SLUG}"
-          POOL_IMAGE="${PREFIX}:packages-${REF_SLUG}"
-
           bash build-config/scripts/ci/analyze-diff.sh \
-            "openwrt" \
-            "build-config/devices/${{ matrix.device }}/.config" \
+            "build-config/devices/${DEVICE}/.config" \
             "$IB_IMAGE" \
             "$POOL_IMAGE" \
-            "${{ matrix.device }}.json"
+            "${DEVICE}.json"
 
       - name: Upload package diff
         uses: actions/upload-artifact@v7
@@ -125,7 +110,7 @@ jobs:
     needs: [Initialize, Analyze-Diff]
     runs-on: ubuntu-24.04
     outputs:
-      arch_paths_matrix: ${{ steps.merge.outputs.matrix }}
+      arch_packages_matrix: ${{ steps.merge.outputs.matrix }}
     steps:
       - name: Checkout config
         uses: actions/checkout@v6
@@ -148,19 +133,16 @@ jobs:
   Compile-Patches:
     name: Compile packages
     needs: [Initialize, Aggregate-Patches]
-    if: needs.Aggregate-Patches.outputs.arch_paths_matrix != '[]'
+    if: needs.Aggregate-Patches.outputs.arch_packages_matrix != '[]'
     strategy:
       fail-fast: false
       matrix:
-        arch_data: ${{ fromJSON(needs.Aggregate-Patches.outputs.arch_paths_matrix) }}
+        arch_data: ${{ fromJSON(needs.Aggregate-Patches.outputs.arch_packages_matrix) }}
     uses: ./.github/workflows/_firmware-packages.yml
     with:
-      arch: ${{ matrix.arch_data.key }}
-      paths: ${{ toJSON(matrix.arch_data.value) }}
-      target_slug: ${{ matrix.arch_data.target_slug }}
-      ref_slug: ${{ needs.Initialize.outputs.ref_slug }}
-      owner_lc: ${{ needs.Initialize.outputs.owner_lc }}
-      repo_name_lc: ${{ needs.Initialize.outputs.repo_name_lc }}
+      arch:      ${{ matrix.arch_data.key }}
+      packages:  ${{ toJSON(matrix.arch_data.value) }}
+      sdk_image: ${{ matrix.arch_data.sdk_image }}
 
   Assemble-Firmware:
     name: Assemble firmware
@@ -172,12 +154,10 @@ jobs:
         device: ${{ fromJSON(needs.Initialize.outputs.device_matrix) }}
     uses: ./.github/workflows/_firmware-image.yml
     with:
-      device: ${{ matrix.device }}
-      target_slug: ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].target_slug }}
-      ref_slug: ${{ needs.Initialize.outputs.ref_slug }}
-      owner_lc: ${{ needs.Initialize.outputs.owner_lc }}
-      repo_name_lc: ${{ needs.Initialize.outputs.repo_name_lc }}
-      arch: ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].arch }}
+      device:     ${{ matrix.device }}
+      arch:       ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].arch }}
+      ib_image:   ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_image }}
+      pool_image: ${{ needs.Initialize.outputs.pool_image }}
 
   Publish-Release:
     name: Publish release

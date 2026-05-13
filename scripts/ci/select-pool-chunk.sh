@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # scripts/ci/select-pool-chunk.sh
 #
-# 从 common/custom-packages.txt 取第 <chunk_id>/<total> 片包名，
-# 按 “行号 % total == chunk_id” 切分，向 stdout 输出 “package/<name>/compile” 行，
-# 供 scripts/build/compile-in-sdk.sh 经管道消费。
+# 从 common/custom-packages.txt 取第 <chunk_id>/<total> 片包名（按行号 mod 切分），
+# 向 stdout 输出「裸包名」一行一个，供 scripts/build/compile-in-sdk.sh 经管道消费。
 #
-# 注意：pool 轨在 SDK 容器里运行，不编译任何内核模块——in-tree kmod 没有
-# package/kmod-xxx/compile 这种粒度，且 SDK 的内核 .config 固定，符号没编进去
-# 就编不出来。所以 kmod-* 条目一律跳过（并打印一条提示），需要的 kmod 请在
-# common/base-config 里以 =m 声明，由完整 buildroot 编进 ImageBuilder。
+# 设计约束:
+#   - pool 轨用 SDK 容器，只编用户态；kmod 必须在 common/base-config 里 =m，由
+#     完整 buildroot 编进 ImageBuilder。pool 清单出现 kmod-* 视为配置错（这里直接
+#     退出 1，让 CI 早红；上游另有 scripts/ci/lint-custom-packages.sh 做更早的静态校验）。
 #
 # 用法:
 #   bash select-pool-chunk.sh <build_config_dir> <chunk_id> <total>
@@ -26,20 +25,28 @@ if [ ! -f "$LIST_FILE" ]; then
 fi
 
 i=0
-while IFS= read -r pkg || [ -n "$pkg" ]; do
-    # 去掉行内首尾空白后跳过空行与注释
-    pkg="${pkg#"${pkg%%[![:space:]]*}"}"   # ltrim
-    pkg="${pkg%"${pkg##*[![:space:]]}"}"   # rtrim
-    case "$pkg" in ''|\#*) continue ;; esac
-    # pool 不编译内核模块：遇到 kmod-* 一律跳过并提示
+errors=0
+while IFS= read -r line || [ -n "$line" ]; do
+    # 剥行尾注释与首尾空白
+    pkg="${line%%#*}"
+    pkg="${pkg#"${pkg%%[![:space:]]*}"}"
+    pkg="${pkg%"${pkg##*[![:space:]]}"}"
     case "$pkg" in
-        kmod-*)
-            echo "::warning::skipping kmod package: $pkg" >&2
-            continue
-            ;;
+        '') continue ;;
     esac
+
+    if [[ "$pkg" == kmod-* ]]; then
+        echo "::error::pool 清单禁止 kmod：'$pkg' (应在 common/base-config 用 CONFIG_PACKAGE_${pkg}=m 声明)" >&2
+        errors=$((errors + 1))
+        continue
+    fi
+
     if [ "$((i % TOTAL))" -eq "$CHUNK_ID" ]; then
-        printf 'package/%s/compile\n' "$pkg"
+        printf '%s\n' "$pkg"
     fi
     i=$((i + 1))
 done < "$LIST_FILE"
+
+if [ "$errors" -gt 0 ]; then
+    exit 1
+fi

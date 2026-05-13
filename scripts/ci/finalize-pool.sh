@@ -7,7 +7,9 @@
 # 参数：
 #   $1: pool chunks 目录 (download-artifact merge 后的目录，内含 <arch>/<feed>/*.ipk)
 #   $2: build-config 目录 (用于取 .github/docker/Dockerfile.packages)
-#   $3: pool 镜像名称 (如 ghcr.io/owner/repo:packages-<ref_slug>)
+#   $3: pool 镜像名称 (如 ghcr.io/owner/repo:packages-<source_slug>，由
+#       scripts/lib/image-tags.sh 的 pool_image_tag 算出；source_slug 形如
+#       K-Lrize-openwrt-main，把 repo 和 ref 都编进去避免跨 fork 撞 tag)
 #   $4: 用于建索引的 SDK 镜像 (任选一个架构的 SDK 即可)
 #
 # 副产物：在 cwd 留下 global-manifest.txt，供调用方上传到 Release (人类可读)。

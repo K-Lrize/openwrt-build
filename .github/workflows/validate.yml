@@ -1,16 +1,24 @@
 name: "[CI] Validate Configuration"
 
+env:
+  DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
+  DEFAULT_OPENWRT_REF: '2026-05-03'
+
 on:
   push:
     paths:
       - 'devices/**/.config'
       - 'devices/**/feeds.conf'
       - 'common/feeds.conf'
+      - 'common/custom-packages.txt'
+      - 'scripts/ci/lint-custom-packages.sh'
   pull_request:
     paths:
       - 'devices/**/.config'
       - 'devices/**/feeds.conf'
       - 'common/feeds.conf'
+      - 'common/custom-packages.txt'
+      - 'scripts/ci/lint-custom-packages.sh'
   workflow_dispatch:
     inputs:
       device:
@@ -27,6 +35,17 @@ on:
         required: true
 
 jobs:
+  Lint-Packages:
+    name: Lint custom-packages.txt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Static lint
+        run: bash scripts/ci/lint-custom-packages.sh
+
   Prepare:
     name: Prepare
     runs-on: ubuntu-latest
@@ -70,8 +89,8 @@ jobs:
       - name: Checkout OpenWrt
         uses: actions/checkout@v6
         with:
-          repository: ${{ github.event.inputs.openwrt_repo || 'K-Lrize/openwrt' }}
-          ref: ${{ github.event.inputs.openwrt_ref || '2026-05-03' }}
+          repository: ${{ github.event.inputs.openwrt_repo || env.DEFAULT_OPENWRT_REPO }}
+          ref: ${{ github.event.inputs.openwrt_ref || env.DEFAULT_OPENWRT_REF }}
           fetch-depth: 1
           persist-credentials: false
 

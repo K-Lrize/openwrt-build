@@ -1,27 +1,20 @@
 name: "[Reusable] Firmware Package Compiler"
 
-# Reusable: build missing packages for one arch.
+# Reusable: per-arch Tier3 增量编译。接收 missing 包名列表 + 完整 sdk_image tag。
 
 on:
   workflow_call:
     inputs:
       arch:
+        description: 'Target arch (eg. aarch64_cortex-a53)，artifact 名也用'
         type: string
         required: true
-      target_slug:
+      sdk_image:
+        description: '完整 GHCR SDK tag，由 firmware.yml 的 Initialize 用 device_meta 算好'
         type: string
         required: true
-      ref_slug:
-        type: string
-        required: true
-      owner_lc:
-        type: string
-        required: true
-      repo_name_lc:
-        type: string
-        required: true
-      paths:
-        description: 'Source directories to compile'
+      packages:
+        description: 'JSON 字符串：要补编的裸包名数组'
         type: string
         required: true
 
@@ -49,23 +42,23 @@ jobs:
       - name: Compile packages
         shell: bash
         env:
-          SDK_IMAGE: ghcr.io/${{ inputs.owner_lc }}/${{ inputs.repo_name_lc }}:sdk-${{ inputs.target_slug }}-${{ inputs.ref_slug }}
-          PATHS: ${{ inputs.paths }}
-          ARCH: ${{ inputs.arch }}
+          SDK_IMAGE: ${{ inputs.sdk_image }}
+          PACKAGES:  ${{ inputs.packages }}
+          ARCH:      ${{ inputs.arch }}
+          STRICT_VALIDATION: '0'
         run: |
           set -euo pipefail
           mkdir -p tier3-outputs pkg-out
 
-          # Include all device configs so SDK sees required kmods.
+          # Merge every device .config so defconfig 能解析 kmod 等设备级选项
+          # （Tier3 不实际编 kmod，但要让 defconfig 不报缺）
           : > combined.config
           find build-config/devices/ -name ".config" -exec cat {} + >> combined.config
 
-          # Source dirs -> make targets -> SDK compile.
-          jq -r '.[]' <<< "$PATHS" | sed 's#$#/compile#' \
+          jq -r '.[]' <<< "$PACKAGES" \
             | bash build-config/scripts/build/compile-in-sdk.sh \
                 build-config "$SDK_IMAGE" pkg-out __all__ combined.config
 
-          # Flatten packages for this arch.
           find "pkg-out/packages/${ARCH}" -type f \( -name '*.ipk' -o -name '*.apk' \) \
             -exec cp -v {} tier3-outputs/ \; 2>/dev/null || true
 

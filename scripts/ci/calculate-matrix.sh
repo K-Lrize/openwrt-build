@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
 # 脚本职责：计算 OpenWrt 构建矩阵
 #
+# 环境变量输入（顶层 workflow 的 Initialize job 提供，缺省用 fallback）:
+#   OPENWRT_REPO          上游 OpenWrt 仓库 (eg. K-Lrize/openwrt)
+#   OPENWRT_REF           上游分支/tag/sha (eg. main)
+#   GITHUB_REPOSITORY     owner/repo 形式 (GHA 内置)；若缺省退化为本地仓库名
+#
 # 输出 GHA outputs:
-#   device_matrix: ["mt3600be"]              JSON 数组
-#   arch_matrix:   ["aarch64_cortex-a53"]    JSON 数组（按 arch 去重）
-#   device_meta:   {"mt3600be":{...}}        JSON 对象（compact 单行）
-#   device_list:   "mt3600be"                人类可读
-#   has_builds:    true/false
+#   device_matrix:            ["mt3600be"]
+#   arch_matrix:              ["aarch64_cortex-a53"]
+#   target_matrix:            ["mediatek/filogic"]
+#   target_matrix_with_meta:  [{"target","target_slug","sdk_image","ib_image"}]
+#   device_meta:              {"mt3600be":{...}}
+#   device_list:              "mt3600be"
+#   source_slug:              "K-Lrize-openwrt-main"
+#   pool_image:               "ghcr.io/.../packages-K-Lrize-openwrt-main"
+#   first_target_sdk_image:   "ghcr.io/.../sdk-<first>-K-Lrize-openwrt-main"
+#   owner_lc, repo_name_lc, ref_slug
+#   has_builds:               true/false
 #
 # device_meta 每条 device 的字段:
-#   arch, target, profile,
-#   packages          (override pkg names，BuildCustomPackages 的 override 路径)
-#   device_packages   (device .config 启用的全部官方包名，Prepare 计算 missing 用)
-#   extra_feeds (multiline), override_pairs (multiline), config_injections (multiline)
+#   arch, target, target_slug, profile,
+#   sdk_image, ib_image (完整 GHCR tag，下游 reusable workflow 直接消费)
 
 set -euo pipefail
 
@@ -23,6 +32,22 @@ CONF_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$CONF_DIR/scripts/lib/extract-config.sh"
 # shellcheck source=../lib/slugify.sh
 source "$CONF_DIR/scripts/lib/slugify.sh"
+# shellcheck source=../lib/image-tags.sh
+source "$CONF_DIR/scripts/lib/image-tags.sh"
+
+OPENWRT_REPO="${OPENWRT_REPO:-K-Lrize/openwrt}"
+OPENWRT_REF="${OPENWRT_REF:-main}"
+GH_REPO="${GITHUB_REPOSITORY:-}"
+if [ -n "$GH_REPO" ]; then
+    OWNER_LC=$(echo "${GH_REPO%%/*}" | tr '[:upper:]' '[:lower:]')
+    REPO_NAME_LC=$(echo "${GH_REPO##*/}" | tr '[:upper:]' '[:lower:]')
+else
+    OWNER_LC="local"
+    REPO_NAME_LC="local"
+fi
+IMAGE_PREFIX=$(image_prefix "$OWNER_LC" "$REPO_NAME_LC")
+SRC_SLUG=$(source_slug "$OPENWRT_REPO" "$OPENWRT_REF")
+REF_SLUG=$(slugify "$OPENWRT_REF")
 
 cd "$CONF_DIR"
 
@@ -98,8 +123,16 @@ if [ ${#BUILD_LIST[@]} -eq 0 ]; then
     {
         echo "device_matrix=[]"
         echo "arch_matrix=[]"
+        echo "target_matrix=[]"
+        echo "target_matrix_with_meta=[]"
         echo "device_meta={}"
         echo "device_list="
+        echo "source_slug=${SRC_SLUG}"
+        echo "pool_image=$(pool_image_tag "$IMAGE_PREFIX" "$OPENWRT_REPO" "$OPENWRT_REF")"
+        echo "first_target_sdk_image="
+        echo "owner_lc=${OWNER_LC}"
+        echo "repo_name_lc=${REPO_NAME_LC}"
+        echo "ref_slug=${REF_SLUG}"
         echo "has_builds=false"
     } >> "$GITHUB_OUTPUT"
     exit 0
@@ -112,13 +145,13 @@ target_set=()
 
 for dev in "${BUILD_LIST[@]}"; do
     cfg="devices/${dev}/.config"
-    feeds="devices/${dev}/feeds.conf"
-    common_feeds="common/feeds.conf"
 
     arch=$(extract_arch "$cfg")
     target=$(extract_target "$cfg")
     profile=$(extract_profile "$cfg")
     target_slug=$(slugify "$target")
+    sdk_image=$(sdk_image_tag "$IMAGE_PREFIX" "$target" "$OPENWRT_REPO" "$OPENWRT_REF")
+    ib_image=$(ib_image_tag  "$IMAGE_PREFIX" "$target" "$OPENWRT_REPO" "$OPENWRT_REF")
 
     [ -z "$arch" ] && { echo "::warning::device ${dev} 缺 # @arch 注释，arch 设为 unknown"; arch="unknown"; }
 
@@ -127,11 +160,15 @@ for dev in "${BUILD_LIST[@]}"; do
         --arg target "$target" \
         --arg target_slug "$target_slug" \
         --arg profile "$profile" \
+        --arg sdk_image "$sdk_image" \
+        --arg ib_image "$ib_image" \
         '{
             arch: $arch,
             target: $target,
             target_slug: $target_slug,
-            profile: $profile
+            profile: $profile,
+            sdk_image: $sdk_image,
+            ib_image: $ib_image
         }')
 
     device_meta=$(jq -c --arg dev "$dev" --argjson meta "$dev_meta" \
@@ -145,23 +182,52 @@ done
 mapfile -t arch_list < <(printf '%s\n' "${arch_set[@]}" | sort -u)
 mapfile -t target_list < <(printf '%s\n' "${target_set[@]}" | sort -u)
 
-# 6. 序列化 + 输出
+# 6. per-target metadata（驱动 base.yml / pool-update.yml 的矩阵）
+target_meta='[]'
+first_sdk_image=""
+for target in "${target_list[@]}"; do
+    target_slug=$(slugify "$target")
+    sdk_image=$(sdk_image_tag "$IMAGE_PREFIX" "$target" "$OPENWRT_REPO" "$OPENWRT_REF")
+    ib_image=$(ib_image_tag  "$IMAGE_PREFIX" "$target" "$OPENWRT_REPO" "$OPENWRT_REF")
+    [ -z "$first_sdk_image" ] && first_sdk_image="$sdk_image"
+    entry=$(jq -nc \
+        --arg target "$target" \
+        --arg target_slug "$target_slug" \
+        --arg sdk_image "$sdk_image" \
+        --arg ib_image "$ib_image" \
+        '{target:$target, target_slug:$target_slug, sdk_image:$sdk_image, ib_image:$ib_image}')
+    target_meta=$(jq -nc --argjson r "$target_meta" --argjson e "$entry" '$r + [$e]')
+done
+
+# 7. 序列化 + 输出
 device_matrix_json=$(printf '%s\n' "${BUILD_LIST[@]}" | jq -R . | jq -s -c .)
 arch_matrix_json=$(printf '%s\n' "${arch_list[@]}" | jq -R . | jq -s -c .)
 target_matrix_json=$(printf '%s\n' "${target_list[@]}" | jq -R . | jq -s -c .)
 device_list=$(printf '%s, ' "${BUILD_LIST[@]}"); device_list="${device_list%, }"
+pool_image=$(pool_image_tag "$IMAGE_PREFIX" "$OPENWRT_REPO" "$OPENWRT_REF")
 
 {
     echo "device_matrix=${device_matrix_json}"
     echo "arch_matrix=${arch_matrix_json}"
     echo "target_matrix=${target_matrix_json}"
+    echo "target_matrix_with_meta=${target_meta}"
     echo "device_meta=${device_meta}"
     echo "device_list=${device_list}"
+    echo "source_slug=${SRC_SLUG}"
+    echo "ref_slug=${REF_SLUG}"
+    echo "pool_image=${pool_image}"
+    echo "first_target_sdk_image=${first_sdk_image}"
+    echo "owner_lc=${OWNER_LC}"
+    echo "repo_name_lc=${REPO_NAME_LC}"
     echo "has_builds=true"
 } >> "$GITHUB_OUTPUT"
 
-echo "device_matrix: ${device_matrix_json}"
-echo "arch_matrix:   ${arch_matrix_json}"
-echo "target_matrix: ${target_matrix_json}"
-echo "device_meta:   ${device_meta}"
-echo "device_list:   ${device_list}"
+echo "device_matrix:           ${device_matrix_json}"
+echo "arch_matrix:             ${arch_matrix_json}"
+echo "target_matrix:           ${target_matrix_json}"
+echo "target_matrix_with_meta: ${target_meta}"
+echo "device_meta:             ${device_meta}"
+echo "device_list:             ${device_list}"
+echo "source_slug:             ${SRC_SLUG}"
+echo "pool_image:              ${pool_image}"
+echo "first_target_sdk_image:  ${first_sdk_image}"

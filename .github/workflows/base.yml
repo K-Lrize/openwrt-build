@@ -1,6 +1,7 @@
 name: "[Build] Base SDK & ImageBuilder"
 
-# Build SDK, ImageBuilder, and package-pool images.
+# Build SDK + ImageBuilder per target, publish base tarballs, and trigger
+# pool update in a separate run (so Pool failures never taint this workflow).
 
 permissions:
   contents: write
@@ -29,32 +30,36 @@ jobs:
     name: Prepare
     runs-on: ubuntu-24.04
     outputs:
-      target_matrix: ${{ steps.matrix.outputs.target_matrix }}
-      owner_lc:      ${{ steps.slugs.outputs.owner_lc }}
-      repo_name_lc:  ${{ steps.slugs.outputs.repo_name_lc }}
-      ref_slug:      ${{ steps.slugs.outputs.ref_slug }}
-      openwrt_ref:   ${{ steps.slugs.outputs.openwrt_ref }}
-      openwrt_repo:  ${{ steps.slugs.outputs.openwrt_repo }}
+      target_matrix:            ${{ steps.matrix.outputs.target_matrix }}
+      target_matrix_with_meta:  ${{ steps.matrix.outputs.target_matrix_with_meta }}
+      source_slug:              ${{ steps.matrix.outputs.source_slug }}
+      pool_image:               ${{ steps.matrix.outputs.pool_image }}
+      first_target_sdk_image:   ${{ steps.matrix.outputs.first_target_sdk_image }}
+      owner_lc:                 ${{ steps.matrix.outputs.owner_lc }}
+      repo_name_lc:             ${{ steps.matrix.outputs.repo_name_lc }}
+      openwrt_ref:              ${{ steps.echo.outputs.openwrt_ref }}
+      openwrt_repo:             ${{ steps.echo.outputs.openwrt_repo }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Build matrix
-        id: matrix
-        run: bash scripts/ci/calculate-matrix.sh
-
-      - name: Compute names
-        id: slugs
+      - name: Echo source inputs
+        id: echo
         shell: bash
         run: |
-          source scripts/lib/slugify.sh
           openwrt_ref="${{ inputs.openwrt_ref || env.DEFAULT_OPENWRT_REF }}"
           openwrt_repo="${{ inputs.openwrt_repo || env.DEFAULT_OPENWRT_REPO }}"
-          echo "openwrt_ref=${openwrt_ref}" >> "$GITHUB_OUTPUT"
-          echo "openwrt_repo=${openwrt_repo}" >> "$GITHUB_OUTPUT"
-          echo "ref_slug=$(slugify "$openwrt_ref")" >> "$GITHUB_OUTPUT"
-          echo "owner_lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
-          echo "repo_name_lc=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          {
+            echo "openwrt_ref=${openwrt_ref}"
+            echo "openwrt_repo=${openwrt_repo}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build matrix
+        id: matrix
+        env:
+          OPENWRT_REPO: ${{ steps.echo.outputs.openwrt_repo }}
+          OPENWRT_REF:  ${{ steps.echo.outputs.openwrt_ref }}
+        run: bash scripts/ci/calculate-matrix.sh
 
   Build-Base:
     name: Build base
@@ -69,59 +74,59 @@ jobs:
       openwrt_ref:  ${{ needs.Initialize.outputs.openwrt_ref }}
       target:       ${{ matrix.target }}
 
-  Finalize-Pool:
-    name: Publish package pool
+  Publish-Infrastructure-Assets:
+    name: Publish SDK/IB tarballs
     needs: [Initialize, Build-Base]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-      packages: write
-    env:
-      OWNER_LC:     ${{ needs.Initialize.outputs.owner_lc }}
-      REPO_NAME_LC: ${{ needs.Initialize.outputs.repo_name_lc }}
-      REF_SLUG:     ${{ needs.Initialize.outputs.ref_slug }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Download pool chunks
-        uses: actions/download-artifact@v8
-        with:
-          pattern: pool-chunk-*
-          path: pool/
-          merge-multiple: true
-
       - name: Download base tarballs
         uses: actions/download-artifact@v8
         with:
-          pattern: infrastructure-*
+          pattern: infrastructure-*-${{ needs.Initialize.outputs.source_slug }}
           path: infra-assets/
           merge-multiple: true
-
-      - name: Login to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Push package pool
-        shell: bash
-        run: |
-          source scripts/lib/slugify.sh
-          TARGET_SLUG=$(slugify "$(echo '${{ needs.Initialize.outputs.target_matrix }}' | jq -r '.[0]')")
-          PREFIX="ghcr.io/${OWNER_LC}/${REPO_NAME_LC}"
-          SDK_IMAGE="${PREFIX}:sdk-${TARGET_SLUG}-${REF_SLUG}"
-          POOL_IMAGE="${PREFIX}:packages-${REF_SLUG}"
-
-          bash scripts/ci/finalize-pool.sh "pool" "." "$POOL_IMAGE" "$SDK_IMAGE"
 
       - name: Update rolling release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: |
-            global-manifest.txt
             infra-assets/**/*
           prerelease: true
           make_latest: true
+
+  # Pool 编译已物理拆出到 pool-update.yml（独立 workflow_dispatch run）。
+  # GHA 不允许 reusable workflow caller 加 continue-on-error，本 job 用 gh CLI
+  # 触发 pool-update.yml 后立即返回——Pool 真正成败由那个独立 run 承载，
+  # 不会污染本 workflow 的红绿态。修复 config 后也可直接手动重新 dispatch。
+  Trigger-Pool-Update:
+    name: Trigger pool update
+    needs: [Initialize, Build-Base]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Dispatch pool-update.yml
+        env:
+          GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+          OPENWRT_REPO: ${{ needs.Initialize.outputs.openwrt_repo }}
+          OPENWRT_REF:  ${{ needs.Initialize.outputs.openwrt_ref }}
+        run: |
+          set -euo pipefail
+          # GITHUB_TOKEN 允许触发 workflow_dispatch（GHA 安全策略的明文例外）。
+          gh workflow run pool-update.yml \
+            --ref "${GITHUB_REF}" \
+            -f "openwrt_repo=${OPENWRT_REPO}" \
+            -f "openwrt_ref=${OPENWRT_REF}" \
+            -f strict=true \
+            -f update_release=true
+          echo "::notice::已触发 pool-update.yml — 在 Actions 页查看进度，失败时可独立重新 dispatch（拿最新分支 config）。"

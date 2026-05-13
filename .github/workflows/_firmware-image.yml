@@ -8,19 +8,15 @@ on:
       device:
         type: string
         required: true
-      target_slug:
-        type: string
-        required: true
-      ref_slug:
-        type: string
-        required: true
-      owner_lc:
-        type: string
-        required: true
-      repo_name_lc:
-        type: string
-        required: true
       arch:
+        type: string
+        required: true
+      ib_image:
+        description: '完整 GHCR ImageBuilder tag'
+        type: string
+        required: true
+      pool_image:
+        description: '完整 GHCR packages-<source_slug> tag (Tier2 来源)'
         type: string
         required: true
 
@@ -55,7 +51,7 @@ jobs:
       - name: Download package pool
         shell: bash
         env:
-          POOL_IMAGE: ghcr.io/${{ inputs.owner_lc }}/${{ inputs.repo_name_lc }}:packages-${{ inputs.ref_slug }}
+          POOL_IMAGE: ${{ inputs.pool_image }}
           ARCH: ${{ inputs.arch }}
         run: |
           mkdir -p tier2-packages
@@ -71,7 +67,7 @@ jobs:
       - name: Assemble image
         shell: bash
         env:
-          IB_IMAGE: ghcr.io/${{ inputs.owner_lc }}/${{ inputs.repo_name_lc }}:ib-${{ inputs.target_slug }}-${{ inputs.ref_slug }}
+          IB_IMAGE: ${{ inputs.ib_image }}
           DEVICE: ${{ inputs.device }}
         run: |
           set -euo pipefail

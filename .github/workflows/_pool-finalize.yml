@@ -1,0 +1,76 @@
+name: "[Reusable] Package Pool Finalizer"
+
+# Reusable: 把所有 _pool-build.yml 上传的 chunk artifact 合成单个
+# packages-<source_slug> 镜像，推 GHCR。
+#
+# 输入合同：完整的 pool_image / sdk_image tag 由调用方算好。tag 计算集中在
+# scripts/lib/image-tags.sh，调用方（base.yml / pool-update.yml）通过
+# Initialize job 的 calculate-matrix.sh 输出获取，避免重复实现。
+
+on:
+  workflow_call:
+    inputs:
+      pool_image:
+        description: '要推到 GHCR 的 packages-<source_slug> 完整 tag'
+        type: string
+        required: true
+      indexer_sdk_image:
+        description: '用来跑 ipkg/apk 索引生成的 SDK 镜像（任选一个架构的即可）'
+        type: string
+        required: true
+      source_slug:
+        description: 'pool-chunk-* artifact 匹配模式里要用'
+        type: string
+        required: true
+      release_tag:
+        description: '把 global-manifest.txt 附到哪个 Release tag'
+        type: string
+        default: 'rolling'
+      update_release:
+        description: '是否把 global-manifest.txt 推到 Release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  Finalize-Pool:
+    name: Publish package pool
+    runs-on: ubuntu-24.04
+    env:
+      POOL_IMAGE:        ${{ inputs.pool_image }}
+      INDEXER_SDK_IMAGE: ${{ inputs.indexer_sdk_image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download pool chunks
+        uses: actions/download-artifact@v8
+        with:
+          pattern: pool-chunk-*-${{ inputs.source_slug }}-*
+          path: pool/
+          merge-multiple: true
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push package pool
+        shell: bash
+        run: |
+          bash scripts/ci/finalize-pool.sh "pool" "." "$POOL_IMAGE" "$INDEXER_SDK_IMAGE"
+
+      - name: Update rolling release
+        if: ${{ inputs.update_release }}
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: |
+            global-manifest.txt
+          prerelease: true
+          make_latest: true

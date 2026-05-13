@@ -1,0 +1,73 @@
+name: "[Reusable] Package Pool Builder"
+
+# Reusable: per-target Pool 编译，按 chunk 切分并发，产物作为 artifact 上传。
+# 调用方应跟着调 _pool-finalize.yml 把所有 chunk 合成 packages-<source_slug> 镜像
+# （source_slug = slugify(repo)-slugify(ref)，避免不同 fork 撞 tag）。
+#
+# 输入合同：完整的 GHCR sdk_image tag + target/source slug 三件套。tag 由顶层
+# workflow 的 Initialize（用 scripts/lib/image-tags.sh）算好后透传过来，避免
+# slug 算法在多个 workflow 重复实现导致漂移。
+
+on:
+  workflow_call:
+    inputs:
+      sdk_image:
+        description: '完整 GHCR SDK tag，如 ghcr.io/<owner>/<repo>:sdk-<target>-<source>'
+        type: string
+        required: true
+      target_slug:
+        description: 'slugify(target)，用于 artifact 命名 + 日志可读'
+        type: string
+        required: true
+      source_slug:
+        description: 'source_slug(repo,ref) = repo_slug-ref_slug，用于 artifact 命名跨 run 区分'
+        type: string
+        required: true
+      strict:
+        description: 'defconfig 后包名缺失时是否硬失败 (Pool 默认 true)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  Build-Global-Pool:
+    name: Build pool ${{ inputs.target_slug }} chunk ${{ matrix.chunk }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [0, 1, 2, 3]
+    steps:
+      - name: Checkout config
+        uses: actions/checkout@v6
+        with:
+          path: build-config
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compile pool chunk
+        shell: bash
+        env:
+          SDK_IMAGE: ${{ inputs.sdk_image }}
+          CHUNK_ID: ${{ matrix.chunk }}
+          STRICT_VALIDATION: ${{ inputs.strict && '1' || '0' }}
+        run: |
+          mkdir -p pool-out
+          bash build-config/scripts/ci/select-pool-chunk.sh build-config "$CHUNK_ID" 4 \
+            | bash build-config/scripts/build/compile-in-sdk.sh build-config "$SDK_IMAGE" pool-out ""
+
+      - name: Upload pool chunk
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pool-chunk-${{ inputs.target_slug }}-${{ inputs.source_slug }}-${{ matrix.chunk }}
+          path: pool-out/packages/
+          if-no-files-found: warn
