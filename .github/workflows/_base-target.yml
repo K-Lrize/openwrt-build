@@ -217,7 +217,7 @@ jobs:
       - name: Download base tarballs
         uses: actions/download-artifact@v8
         with:
-          name: infrastructure-${{ needs.Build-Base-Infrastructure.outputs.target_slug }}
+          name: infrastructure-${{ needs.Build-Base-Infrastructure.outputs.target_slug }}-${{ needs.Build-Base-Infrastructure.outputs.source_slug }}
           path: bin/targets
 
       - name: Log in to GHCR
