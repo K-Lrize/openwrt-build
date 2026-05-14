@@ -1,6 +1,8 @@
 name: "[Reusable] Firmware Image Generator"
 
-# Reusable: assemble one device image.
+# Reusable: assemble one device firmware image. 走 release tarball + host-native:
+#   gh release download IB tar + pool tar → tar -xf → ib/prepare-repo → ib/make-image
+# Tier3 补编的 ipk 通过 artifact 拿到本地,与 pool 解压结果合并喂给 ib/prepare-repo。
 
 on:
   workflow_call:
@@ -11,18 +13,21 @@ on:
       arch:
         type: string
         required: true
-      ib_image:
-        description: '完整 GHCR ImageBuilder tag'
+      ib_tar_name:
+        description: 'IB tarball asset 名 (从 device_meta.ib_tar_name 取)'
         type: string
         required: true
-      pool_image:
-        description: '完整 GHCR packages-<source_slug> tag (Tier2 来源)'
+      pool_tar_name:
+        description: 'Pool tarball asset 名 (从 device_meta.pool_tar_name 取)'
         type: string
         required: true
+      release_tag:
+        description: '从哪个 release tag 下载 IB / pool tar'
+        type: string
+        default: 'rolling'
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   Assemble-Firmware:
@@ -34,110 +39,102 @@ jobs:
         with:
           path: build-config
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install host deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates file gawk gettext git jq libncurses-dev \
+            perl python3 rsync signify-openbsd unzip wget xz-utils zlib1g zstd
 
-      - name: Download fresh packages
+      - name: Download tier3 packages
         uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           name: tier3-ipks-${{ inputs.arch }}
           path: tier3-packages/
 
-      - name: Download package pool
+      - name: Download IB tarball
         shell: bash
         env:
-          POOL_IMAGE: ${{ inputs.pool_image }}
-          ARCH: ${{ inputs.arch }}
+          GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+          IB_TAR_NAME:  ${{ inputs.ib_tar_name }}
+          RELEASE_TAG:  ${{ inputs.release_tag }}
         run: |
+          set -e
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$IB_TAR_NAME" \
+            --output "$IB_TAR_NAME"
+          mkdir -p ib-work
+          tar --use-compress-program=unzstd -xf "$IB_TAR_NAME" \
+              -C ib-work --strip-components=1
+
+      - name: Download pool tarball
+        shell: bash
+        env:
+          GH_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
+          POOL_TAR_NAME:   ${{ inputs.pool_tar_name }}
+          RELEASE_TAG:     ${{ inputs.release_tag }}
+        run: |
+          set -e
           mkdir -p tier2-packages
-          docker pull "$POOL_IMAGE" 2>/dev/null || { sleep 10; docker pull "$POOL_IMAGE" 2>/dev/null; } || true
-          cid="$(docker create "$POOL_IMAGE" 2>/dev/null)" || cid=""
-          if [ -n "$cid" ]; then
-            docker cp "${cid}:/packages/${ARCH}/." tier2-packages/ 2>/dev/null || true
-            docker rm "$cid" >/dev/null 2>&1 || true
+          if ! gh release download "$RELEASE_TAG" \
+                 --repo "$GITHUB_REPOSITORY" \
+                 --pattern "$POOL_TAR_NAME" \
+                 --output "$POOL_TAR_NAME" 2>/dev/null; then
+            echo "::warning::Pool tar ${POOL_TAR_NAME} 未发布 (Tier2 按空处理)。"
           else
-            echo "::warning::Package pool ${POOL_IMAGE} is unavailable."
+            tar --use-compress-program=unzstd -xf "$POOL_TAR_NAME" -C tier2-packages
           fi
 
-      - name: Assemble image
+      - name: Stage unified package directory
+        shell: bash
+        run: |
+          set -e
+          mkdir -p unified_repo
+          find tier2-packages/ tier3-packages/ -type f \( -name "*.ipk" -o -name "*.apk" \) \
+            -exec cp -v {} unified_repo/ \; 2>/dev/null || true
+          echo "unified_repo: $(find unified_repo -maxdepth 1 -type f | wc -l | tr -d ' ') 个 ipk/apk"
+
+      - name: Register local feed in IB
+        shell: bash
+        run: |
+          bash build-config/scripts/ib/prepare-repo.sh \
+            --workdir ib-work \
+            --packages-dir unified_repo
+
+      - name: Build firmware image
         shell: bash
         env:
-          IB_IMAGE: ${{ inputs.ib_image }}
           DEVICE: ${{ inputs.device }}
         run: |
-          set -euo pipefail
-          BUILD_CONFIG="$GITHUB_WORKSPACE/build-config"
-          source "$BUILD_CONFIG/scripts/lib/extract-config.sh"
-
-          mkdir -p unified_repo bin-targets bin/outputs
-          find tier2-packages/ tier3-packages/ -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp -v {} unified_repo/ \; 2>/dev/null || true
-
-          # Allow the container builder user to write outputs.
-          sudo chmod -R 777 "$GITHUB_WORKSPACE"
-
-          DEVICE_CONFIG="$BUILD_CONFIG/devices/${DEVICE}/.config"
+          set -e
+          source build-config/scripts/lib/extract-config.sh
+          DEVICE_CONFIG="build-config/devices/${DEVICE}/.config"
           PROFILE=$(extract_profile "$DEVICE_CONFIG")
           PACKAGES=$(extract_packages "$DEVICE_CONFIG" | tr '\n' ' ')
 
-          # Script executed inside ImageBuilder.
-          cat > run-ib.sh << 'EOF'
-          set -euo pipefail
-          DEVICE="$1"
-          PROFILE="$2"
-          PACKAGES="$3"
-          cd /home/builder
-
-          echo "::group::Local package index"
-          mkdir -p /tmp/local_repo
-          cp /tmp/unified_repo/* /tmp/local_repo/ 2>/dev/null || true
-          if [ -n "$(ls -A /tmp/local_repo 2>/dev/null)" ]; then
-            if command -v apk >/dev/null; then
-              apk mkndx -o /tmp/local_repo/APKINDEX.tar.gz /tmp/local_repo/*.apk 2>/dev/null || true
-            fi
-            if [ -f "./scripts/ipkg-make-index.sh" ]; then
-              ./scripts/ipkg-make-index.sh /tmp/local_repo > /tmp/local_repo/Packages
-              gzip -9nc /tmp/local_repo/Packages > /tmp/local_repo/Packages.gz
-            fi
-            # Local packages must override upstream feeds.
-            sed -i '1i src/gz local file:///tmp/local_repo' repositories.conf
-          fi
-          echo "::endgroup::"
-
-          echo "::group::Merge files"
-          bash /build-config/scripts/build/merge-assets.sh "${DEVICE}"
-          echo "::endgroup::"
-
-          echo "::group::ImageBuilder"
-          make image PROFILE="$PROFILE" PACKAGES="$PACKAGES" FILES="files/"
-          echo "::endgroup::"
-
-          cp -ra bin/targets/* /tmp/bin-targets/
-          EOF
-
-          docker pull "$IB_IMAGE" || { sleep 10; docker pull "$IB_IMAGE"; }
-          docker run --rm \
-            -v "$GITHUB_WORKSPACE/unified_repo:/tmp/unified_repo:ro" \
-            -v "$BUILD_CONFIG:/build-config:ro" \
-            -v "$GITHUB_WORKSPACE/bin-targets:/tmp/bin-targets" \
-            -v "$GITHUB_WORKSPACE/run-ib.sh:/run-ib.sh:ro" \
-            "$IB_IMAGE" bash /run-ib.sh "$DEVICE" "$PROFILE" "$PACKAGES"
+          bash build-config/scripts/ib/make-image.sh \
+            --workdir ib-work \
+            --conf-dir "$GITHUB_WORKSPACE/build-config" \
+            --device "$DEVICE" \
+            --profile "$PROFILE" \
+            --packages "$PACKAGES" \
+            --out bin-targets
 
       - name: Collect outputs
         shell: bash
+        env:
+          DEVICE: ${{ inputs.device }}
         run: |
           output_dir="bin/outputs"
           mkdir -p "${output_dir}"
           find bin-targets/ -type f \( -name "*sysupgrade*" -o -name "*factory*" -o -name "*.manifest" -o -name "profiles.json" \) | while read -r file; do
             filename=$(basename "$file")
-            cp -v "$file" "${output_dir}/${{ inputs.device }}-${filename}"
+            cp -v "$file" "${output_dir}/${DEVICE}-${filename}"
           done
           bash build-config/scripts/ci/checksums.sh "${output_dir}"
-          mv "${output_dir}/sha256sums.txt" "${output_dir}/${{ inputs.device }}-sha256sums.txt"
+          mv "${output_dir}/sha256sums.txt" "${output_dir}/${DEVICE}-sha256sums.txt"
 
       - name: Upload firmware
         uses: actions/upload-artifact@v7

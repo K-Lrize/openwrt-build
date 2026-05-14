@@ -34,13 +34,13 @@ jobs:
     name: Prepare
     runs-on: ubuntu-24.04
     outputs:
-      device_matrix:   ${{ steps.matrix.outputs.device_matrix }}
-      device_meta:     ${{ steps.matrix.outputs.device_meta }}
-      has_builds:      ${{ steps.matrix.outputs.has_builds }}
-      pool_image:      ${{ steps.matrix.outputs.pool_image }}
-      source_slug:     ${{ steps.matrix.outputs.source_slug }}
-      openwrt_ref:     ${{ steps.echo.outputs.openwrt_ref }}
-      openwrt_repo:    ${{ steps.echo.outputs.openwrt_repo }}
+      device_matrix:        ${{ steps.matrix.outputs.device_matrix }}
+      device_meta:          ${{ steps.matrix.outputs.device_meta }}
+      has_builds:           ${{ steps.matrix.outputs.has_builds }}
+      source_slug:          ${{ steps.matrix.outputs.source_slug }}
+      pool_manifest_name:   ${{ steps.matrix.outputs.pool_manifest_name }}
+      openwrt_ref:          ${{ steps.echo.outputs.openwrt_ref }}
+      openwrt_repo:         ${{ steps.echo.outputs.openwrt_repo }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -78,26 +78,41 @@ jobs:
         with:
           path: build-config
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download manifest sidecars
+        shell: bash
+        env:
+          GH_TOKEN:            ${{ secrets.GITHUB_TOKEN }}
+          IB_MANIFEST_NAME:    ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_manifest_name }}
+          POOL_MANIFEST_NAME:  ${{ needs.Initialize.outputs.pool_manifest_name }}
+          RELEASE_TAG:         ${{ env.RELEASE_TAG }}
+        run: |
+          set -e
+          # Tier1: IB sidecar manifest (强依赖,缺则 fail)
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$IB_MANIFEST_NAME" \
+            --output ib.manifest.txt
+
+          # Tier2: Pool sidecar manifest (软依赖,首次构建可能还没 pool)
+          if ! gh release download "$RELEASE_TAG" \
+                 --repo "$GITHUB_REPOSITORY" \
+                 --pattern "$POOL_MANIFEST_NAME" \
+                 --output pool.manifest.txt 2>/dev/null; then
+            echo "::warning::Pool manifest ${POOL_MANIFEST_NAME} 未发布,Tier2 清单按空处理。"
+            : > pool.manifest.txt
+          fi
 
       - name: Find missing packages
         id: diff
         shell: bash
         env:
-          IB_IMAGE:   ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_image }}
-          POOL_IMAGE: ${{ needs.Initialize.outputs.pool_image }}
-          DEVICE:     ${{ matrix.device }}
+          DEVICE: ${{ matrix.device }}
         run: |
-          bash build-config/scripts/ci/analyze-diff.sh \
-            "build-config/devices/${DEVICE}/.config" \
-            "$IB_IMAGE" \
-            "$POOL_IMAGE" \
-            "${DEVICE}.json"
+          bash build-config/scripts/firmware/analyze-diff.sh \
+            --config "build-config/devices/${DEVICE}/.config" \
+            --ib-manifest ib.manifest.txt \
+            --pool-manifest pool.manifest.txt \
+            --output "${DEVICE}.json"
 
       - name: Upload package diff
         uses: actions/upload-artifact@v7
@@ -140,9 +155,10 @@ jobs:
         arch_data: ${{ fromJSON(needs.Aggregate-Patches.outputs.arch_packages_matrix) }}
     uses: ./.github/workflows/_firmware-packages.yml
     with:
-      arch:      ${{ matrix.arch_data.key }}
-      packages:  ${{ toJSON(matrix.arch_data.value) }}
-      sdk_image: ${{ matrix.arch_data.sdk_image }}
+      arch:          ${{ matrix.arch_data.key }}
+      packages:      ${{ toJSON(matrix.arch_data.value) }}
+      sdk_tar_name:  ${{ matrix.arch_data.sdk_tar_name }}
+      release_tag:   ${{ env.RELEASE_TAG }}
 
   Assemble-Firmware:
     name: Assemble firmware
@@ -154,10 +170,11 @@ jobs:
         device: ${{ fromJSON(needs.Initialize.outputs.device_matrix) }}
     uses: ./.github/workflows/_firmware-image.yml
     with:
-      device:     ${{ matrix.device }}
-      arch:       ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].arch }}
-      ib_image:   ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_image }}
-      pool_image: ${{ needs.Initialize.outputs.pool_image }}
+      device:         ${{ matrix.device }}
+      arch:           ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].arch }}
+      ib_tar_name:    ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_tar_name }}
+      pool_tar_name:  ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].pool_tar_name }}
+      release_tag:    ${{ env.RELEASE_TAG }}
 
   Publish-Release:
     name: Publish release

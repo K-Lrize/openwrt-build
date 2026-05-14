@@ -5,7 +5,6 @@ name: "[Build] Base SDK & ImageBuilder"
 
 permissions:
   contents: write
-  packages: write
   actions: read
 
 env:
@@ -30,15 +29,15 @@ jobs:
     name: Prepare
     runs-on: ubuntu-24.04
     outputs:
-      target_matrix:            ${{ steps.matrix.outputs.target_matrix }}
-      target_matrix_with_meta:  ${{ steps.matrix.outputs.target_matrix_with_meta }}
-      source_slug:              ${{ steps.matrix.outputs.source_slug }}
-      pool_image:               ${{ steps.matrix.outputs.pool_image }}
-      first_target_sdk_image:   ${{ steps.matrix.outputs.first_target_sdk_image }}
-      owner_lc:                 ${{ steps.matrix.outputs.owner_lc }}
-      repo_name_lc:             ${{ steps.matrix.outputs.repo_name_lc }}
-      openwrt_ref:              ${{ steps.echo.outputs.openwrt_ref }}
-      openwrt_repo:             ${{ steps.echo.outputs.openwrt_repo }}
+      target_matrix:              ${{ steps.matrix.outputs.target_matrix }}
+      target_matrix_with_meta:    ${{ steps.matrix.outputs.target_matrix_with_meta }}
+      source_slug:                ${{ steps.matrix.outputs.source_slug }}
+      pool_manifest_name:         ${{ steps.matrix.outputs.pool_manifest_name }}
+      first_target_sdk_tar_name:  ${{ steps.matrix.outputs.first_target_sdk_tar_name }}
+      owner_lc:                   ${{ steps.matrix.outputs.owner_lc }}
+      repo_name_lc:               ${{ steps.matrix.outputs.repo_name_lc }}
+      openwrt_ref:                ${{ steps.echo.outputs.openwrt_ref }}
+      openwrt_repo:               ${{ steps.echo.outputs.openwrt_repo }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6

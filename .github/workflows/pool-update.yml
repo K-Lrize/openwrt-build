@@ -1,17 +1,16 @@
 name: "[Build] Update package pool"
 
-# 独立的 Pool 修复入口：
-#   - 不重建 SDK / IB，从 GHCR 拉已有 sdk-<target>-<source> 镜像
-#   - checkout 拿当前分支最新的 custom-packages.txt（修了配置随手重跑）
-#   - 失败不染红 base.yml；本工作流自身允许红，便于关注修复进度
+# 独立的 Pool 修复入口:
+#   - 不重建 SDK / IB,从 rolling release 下载已有 SDK tar
+#   - checkout 拿当前分支最新的 custom-packages.txt (修了配置随手重跑)
+#   - 失败不染红 base.yml;本工作流自身允许红,便于关注修复进度
 #
-# 触发方式：
-#   - base.yml 末尾 gh CLI 自动触发（首次构建一站式完成）
-#   - 手动 workflow_dispatch（修复 custom-packages.txt 后单独跑）
+# 触发方式:
+#   - base.yml 末尾 gh CLI 自动触发 (首次构建一站式完成)
+#   - 手动 workflow_dispatch (修复 custom-packages.txt 后单独跑)
 
 permissions:
   contents: write
-  packages: write
   actions: read
 
 env:
@@ -23,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       openwrt_repo:
-        description: 'OpenWrt repo (必须跟 base.yml 上一次构建对齐才能匹配 SDK tag)'
+        description: 'OpenWrt repo (必须跟 base.yml 上一次构建对齐才能匹配 SDK asset 名)'
         default: 'K-Lrize/openwrt'
         required: true
       openwrt_ref:
@@ -35,7 +34,7 @@ on:
         type: boolean
         default: true
       update_release:
-        description: '是否把 global-manifest.txt 推到 rolling release'
+        description: '是否把 pool tar + manifest 推到 rolling release'
         type: boolean
         default: true
 
@@ -44,11 +43,11 @@ jobs:
     name: Prepare
     runs-on: ubuntu-24.04
     outputs:
-      target_matrix_with_meta:  ${{ steps.matrix.outputs.target_matrix_with_meta }}
-      source_slug:              ${{ steps.matrix.outputs.source_slug }}
-      pool_image:               ${{ steps.matrix.outputs.pool_image }}
-      first_target_sdk_image:   ${{ steps.matrix.outputs.first_target_sdk_image }}
-      has_builds:               ${{ steps.matrix.outputs.has_builds }}
+      target_matrix_with_meta:    ${{ steps.matrix.outputs.target_matrix_with_meta }}
+      source_slug:                ${{ steps.matrix.outputs.source_slug }}
+      pool_manifest_name:         ${{ steps.matrix.outputs.pool_manifest_name }}
+      first_target_sdk_tar_name:  ${{ steps.matrix.outputs.first_target_sdk_tar_name }}
+      has_builds:                 ${{ steps.matrix.outputs.has_builds }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -70,10 +69,11 @@ jobs:
         entry: ${{ fromJSON(needs.Initialize.outputs.target_matrix_with_meta) }}
     uses: ./.github/workflows/_pool-build.yml
     with:
-      sdk_image:   ${{ matrix.entry.sdk_image }}
-      target_slug: ${{ matrix.entry.target_slug }}
-      source_slug: ${{ needs.Initialize.outputs.source_slug }}
-      strict:      ${{ inputs.strict }}
+      sdk_tar_name:  ${{ matrix.entry.sdk_tar_name }}
+      target_slug:   ${{ matrix.entry.target_slug }}
+      source_slug:   ${{ needs.Initialize.outputs.source_slug }}
+      release_tag:   ${{ env.RELEASE_TAG }}
+      strict:        ${{ inputs.strict }}
 
   Finalize-Pool:
     name: Finalize pool
@@ -81,8 +81,8 @@ jobs:
     if: needs.Initialize.outputs.has_builds == 'true'
     uses: ./.github/workflows/_pool-finalize.yml
     with:
-      pool_image:        ${{ needs.Initialize.outputs.pool_image }}
-      indexer_sdk_image: ${{ needs.Initialize.outputs.first_target_sdk_image }}
-      source_slug:       ${{ needs.Initialize.outputs.source_slug }}
-      release_tag:       rolling
-      update_release:    ${{ inputs.update_release }}
+      first_target_sdk_tar_name: ${{ needs.Initialize.outputs.first_target_sdk_tar_name }}
+      source_slug:               ${{ needs.Initialize.outputs.source_slug }}
+      pool_manifest_name:        ${{ needs.Initialize.outputs.pool_manifest_name }}
+      release_tag:               ${{ env.RELEASE_TAG }}
+      update_release:            ${{ inputs.update_release }}

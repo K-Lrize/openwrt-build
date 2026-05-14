@@ -1,6 +1,13 @@
 name: "[Reusable] Target Base Builder"
 
-# Reusable: build SDK and ImageBuilder。
+# Reusable: build SDK and ImageBuilder per target,产出三件套推到 rolling release:
+#   1. SDK tarball     (内嵌 base-packages/,供 pool/firmware-packages 阶段 sdk/prepare 自动注入 src-link)
+#   2. IB tarball      (供 firmware-image 阶段本地 tar -x 后直接 make image)
+#   3. IB manifest     (供 firmware analyze-diff 做 Tier1 已装包减法)
+# 文件名规则集中在 scripts/lib/asset-names.sh。
+#
+# 历史:本 workflow 曾把 SDK/IB 打成 docker 镜像推 GHCR,但所有消费端都在
+# ubuntu-24.04 runner 上,docker 只是不必要的传输容器 — 直接走 tarball 更简单。
 
 on:
   workflow_call:
@@ -15,29 +22,30 @@ on:
         type: string
         required: true
     outputs:
-      sdk_image:
-        value: ${{ jobs.Push-Base-Images.outputs.sdk_image }}
-      ib_image:
-        value: ${{ jobs.Push-Base-Images.outputs.ib_image }}
       source_slug:
-        value: ${{ jobs.Push-Base-Images.outputs.source_slug }}
+        value: ${{ jobs.Build-Base-Infrastructure.outputs.source_slug }}
       target_slug:
-        value: ${{ jobs.Push-Base-Images.outputs.target_slug }}
+        value: ${{ jobs.Build-Base-Infrastructure.outputs.target_slug }}
+      sdk_tar_name:
+        value: ${{ jobs.Build-Base-Infrastructure.outputs.sdk_tar_name }}
+      ib_tar_name:
+        value: ${{ jobs.Build-Base-Infrastructure.outputs.ib_tar_name }}
+      ib_manifest_name:
+        value: ${{ jobs.Build-Base-Infrastructure.outputs.ib_manifest_name }}
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   Build-Base-Infrastructure:
     name: Build base
     runs-on: ubuntu-24.04
     outputs:
-      sdk_image:   ${{ steps.slugs.outputs.sdk_image }}
-      ib_image:    ${{ steps.slugs.outputs.ib_image }}
-      target_slug: ${{ steps.slugs.outputs.target_slug }}
-      source_slug: ${{ steps.slugs.outputs.source_slug }}
-      owner_lc:    ${{ steps.slugs.outputs.owner_lc }}
+      source_slug:       ${{ steps.slugs.outputs.source_slug }}
+      target_slug:       ${{ steps.slugs.outputs.target_slug }}
+      sdk_tar_name:      ${{ steps.slugs.outputs.sdk_tar_name }}
+      ib_tar_name:       ${{ steps.slugs.outputs.ib_tar_name }}
+      ib_manifest_name:  ${{ steps.slugs.outputs.ib_manifest_name }}
 
     steps:
       - name: Free disk
@@ -75,35 +83,31 @@ jobs:
       - name: Compute names
         id: slugs
         shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          REPO:   ${{ inputs.openwrt_repo }}
+          REF:    ${{ inputs.openwrt_ref }}
         run: |
-          source "build-config/scripts/lib/slugify.sh"
-          source "build-config/scripts/lib/image-tags.sh"
-          target_slug=$(slugify "${{ inputs.target }}")
-          src_slug=$(source_slug "${{ inputs.openwrt_repo }}" "${{ inputs.openwrt_ref }}")
-          owner_lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
-          repo_name_lc=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')
-          prefix=$(image_prefix "$owner_lc" "$repo_name_lc")
-          sdk_image=$(sdk_image_tag "$prefix" "${{ inputs.target }}" "${{ inputs.openwrt_repo }}" "${{ inputs.openwrt_ref }}")
-          ib_image=$(ib_image_tag  "$prefix" "${{ inputs.target }}" "${{ inputs.openwrt_repo }}" "${{ inputs.openwrt_ref }}")
+          source build-config/scripts/lib/slugify.sh
+          source build-config/scripts/lib/asset-names.sh
           {
-            echo "target_slug=${target_slug}"
-            echo "source_slug=${src_slug}"
-            echo "owner_lc=${owner_lc}"
-            echo "repo_name_lc=${repo_name_lc}"
-            echo "sdk_image=${sdk_image}"
-            echo "ib_image=${ib_image}"
+            echo "target_slug=$(slugify "$TARGET")"
+            echo "source_slug=$(source_slug "$REPO" "$REF")"
+            echo "sdk_tar_name=$(sdk_tar_name "$TARGET" "$REPO" "$REF")"
+            echo "ib_tar_name=$(ib_tar_name "$TARGET" "$REPO" "$REF")"
+            echo "ib_manifest_name=$(ib_manifest_name "$TARGET" "$REPO" "$REF")"
           } >> "$GITHUB_OUTPUT"
 
       - name: Prepare feeds
         shell: bash
-        run: bash build-config/scripts/build/prepare-feeds.sh
+        run: bash build-config/scripts/sdk/prepare.sh --workdir .
 
       - name: Configure base
         shell: bash
         run: |
           target_main=$(echo "${{ inputs.target }}" | cut -d'/' -f1)
           target_sub=$(echo "${{ inputs.target }}" | cut -d'/' -f2)
-          
+
           cat > .config <<EOF
           CONFIG_TARGET_${target_main}=y
           CONFIG_TARGET_${target_main}_${target_sub}=y
@@ -113,12 +117,11 @@ jobs:
           CONFIG_IB_STANDALONE=y
           EOF
 
-          # Add shared base config.
           if [ -f build-config/common/base-config ]; then
             echo "Adding common/base-config..."
             cat build-config/common/base-config >> .config
           fi
-          
+
           make defconfig
 
       - name: Download sources
@@ -183,62 +186,69 @@ jobs:
             make target/imagebuilder/install -j1 V=s
           fi
 
-      - name: Upload base tarballs
+      - name: Stage SDK tar (inject base-packages)
+        shell: bash
+        env:
+          SDK_TAR_NAME: ${{ steps.slugs.outputs.sdk_tar_name }}
+        run: |
+          set -e
+          SRC_TAR="$(find bin/targets -name 'openwrt-sdk-*.tar.*' | head -1)"
+          [ -n "$SRC_TAR" ] || { echo "::error::SDK tar not found"; exit 1; }
+
+          mkdir -p /tmp/sdk-inject release-staging
+          if [[ "$SRC_TAR" == *.zst ]]; then
+            tar --use-compress-program=unzstd -xf "$SRC_TAR" -C /tmp/sdk-inject
+          else
+            tar -xf "$SRC_TAR" -C /tmp/sdk-inject
+          fi
+
+          SDK_DIR="$(ls /tmp/sdk-inject | head -1)"
+          # 注入 base 源 — prepare-feeds.sh/sdk/prepare.sh 检测到 ./base-packages 自动注入 src-link
+          mkdir -p "/tmp/sdk-inject/${SDK_DIR}/base-packages"
+          cp -ra package/* "/tmp/sdk-inject/${SDK_DIR}/base-packages/"
+          # 软链可能指向主源外部,清理掉确保 SDK 自给自足
+          find "/tmp/sdk-inject/${SDK_DIR}/base-packages" -type l -delete
+
+          tar --use-compress-program='zstd -T0 -3' \
+              -cf "release-staging/${SDK_TAR_NAME}" \
+              -C /tmp/sdk-inject "${SDK_DIR}"
+
+          echo "SDK tar:   $(du -h release-staging/${SDK_TAR_NAME} | awk '{print $1}')"
+
+      - name: Stage IB tar + sidecar manifest
+        shell: bash
+        env:
+          IB_TAR_NAME:      ${{ steps.slugs.outputs.ib_tar_name }}
+          IB_MANIFEST_NAME: ${{ steps.slugs.outputs.ib_manifest_name }}
+        run: |
+          set -e
+          SRC_TAR="$(find bin/targets -name 'openwrt-imagebuilder-*.tar.*' | head -1)"
+          [ -n "$SRC_TAR" ] || { echo "::error::ImageBuilder tar not found"; exit 1; }
+
+          mkdir -p /tmp/ib-inspect release-staging
+          if [[ "$SRC_TAR" == *.zst ]]; then
+            tar --use-compress-program=unzstd -xf "$SRC_TAR" -C /tmp/ib-inspect
+          else
+            tar -xf "$SRC_TAR" -C /tmp/ib-inspect
+          fi
+          IB_DIR="$(ls /tmp/ib-inspect | head -1)"
+
+          # IB tar 内容不修改,只是改名落地到 release-staging
+          cp "$SRC_TAR" "release-staging/${IB_TAR_NAME}"
+
+          # 生成 sidecar manifest (扫描内置 ipk/apk,取裸包名)
+          find "/tmp/ib-inspect/${IB_DIR}/packages/" -type f \( -name "*.ipk" -o -name "*.apk" \) \
+            | xargs -n1 basename \
+            | sed -E 's/\.(ipk|apk)$//' \
+            | sed -E 's/_[0-9][^_]*_[a-z0-9_-]+$//' \
+            | sort -u > "release-staging/${IB_MANIFEST_NAME}"
+
+          echo "IB tar:    $(du -h release-staging/${IB_TAR_NAME} | awk '{print $1}')"
+          echo "IB manifest: $(wc -l < release-staging/${IB_MANIFEST_NAME} | tr -d ' ') 个包"
+
+      - name: Upload base release-staging
         uses: actions/upload-artifact@v7
         with:
           name: infrastructure-${{ steps.slugs.outputs.target_slug }}-${{ steps.slugs.outputs.source_slug }}
-          path: |
-            bin/targets/**/openwrt-sdk-*.tar.*
-            bin/targets/**/openwrt-imagebuilder-*.tar.*
+          path: release-staging/*
           retention-days: 1
-
-  Push-Base-Images:
-    name: Push base images
-    needs: Build-Base-Infrastructure
-    runs-on: ubuntu-24.04
-    outputs:
-      sdk_image:   ${{ needs.Build-Base-Infrastructure.outputs.sdk_image }}
-      ib_image:    ${{ needs.Build-Base-Infrastructure.outputs.ib_image }}
-      target_slug: ${{ needs.Build-Base-Infrastructure.outputs.target_slug }}
-      source_slug: ${{ needs.Build-Base-Infrastructure.outputs.source_slug }}
-    steps:
-      - name: Checkout OpenWrt
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ inputs.openwrt_repo }}
-          ref: ${{ inputs.openwrt_ref }}
-          fetch-depth: 1
-
-      - name: Checkout config
-        uses: actions/checkout@v6
-        with:
-          path: build-config
-
-      - name: Download base tarballs
-        uses: actions/download-artifact@v8
-        with:
-          name: infrastructure-${{ needs.Build-Base-Infrastructure.outputs.target_slug }}-${{ needs.Build-Base-Infrastructure.outputs.source_slug }}
-          path: bin/targets
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Prepare image context
-        shell: bash
-        run: |
-          bash build-config/scripts/ci/prepare-docker-context.sh \
-            "build-config" \
-            "bin/targets"
-
-      - name: Push images
-        shell: bash
-        run: |
-          docker build -t ${{ needs.Build-Base-Infrastructure.outputs.ib_image }} docker-ib/
-          docker build -t ${{ needs.Build-Base-Infrastructure.outputs.sdk_image }} docker-sdk/
-          docker push ${{ needs.Build-Base-Infrastructure.outputs.ib_image }}
-          docker push ${{ needs.Build-Base-Infrastructure.outputs.sdk_image }}
-

@@ -43,8 +43,8 @@ for arch in "${!arch_packages[@]}"; do
         | jq -s -c .)
     [ "$(echo "$unique_packages" | jq 'length')" -gt 0 ] || continue
 
-    # 该 arch 下任选一个 device，把它的 sdk_image / ib_image 当作"代表"
-    # （Tier3 只用 SDK 跑 make package/compile，per-target 的 SDK 镜像产物对该 arch 一致）
+    # 该 arch 下任选一个 device,把它的 sdk_tar_name / ib_tar_name 当作"代表"
+    # (Tier3 只用 SDK 跑 make package/compile,per-target 的 SDK tarball 对该 arch 一致)
     rep=$(echo "$DEVICE_META" | jq -c --arg arch "$arch" \
         'to_entries | map(select(.value.arch == $arch)) | .[0].value')
 
@@ -55,9 +55,9 @@ for arch in "${!arch_packages[@]}"; do
         '{
             key: $arch,
             value: $packages,
-            target_slug: $rep.target_slug,
-            sdk_image:   $rep.sdk_image,
-            ib_image:    $rep.ib_image
+            target_slug:   $rep.target_slug,
+            sdk_tar_name:  $rep.sdk_tar_name,
+            ib_tar_name:   $rep.ib_tar_name
         }')
     result=$(echo "$result" | jq -c --argjson entry "$entry" '. + [$entry]')
 done

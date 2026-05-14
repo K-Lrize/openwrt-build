@@ -1,26 +1,30 @@
 name: "[Reusable] Firmware Package Compiler"
 
-# Reusable: per-arch Tier3 增量编译。接收 missing 包名列表 + 完整 sdk_image tag。
+# Reusable: per-arch Tier3 增量编译。接收 missing 包名列表 + SDK tar asset 名。
+# 走 release tarball 下载,host-native 编译。
 
 on:
   workflow_call:
     inputs:
       arch:
-        description: 'Target arch (eg. aarch64_cortex-a53)，artifact 名也用'
+        description: 'Target arch (eg. aarch64_cortex-a53),artifact 名也用'
         type: string
         required: true
-      sdk_image:
-        description: '完整 GHCR SDK tag，由 firmware.yml 的 Initialize 用 device_meta 算好'
+      sdk_tar_name:
+        description: 'SDK tarball asset 名 (从 device_meta.sdk_tar_name 取)'
         type: string
         required: true
       packages:
-        description: 'JSON 字符串：要补编的裸包名数组'
+        description: 'JSON 字符串:要补编的裸包名数组'
         type: string
         required: true
+      release_tag:
+        description: '从哪个 release tag 下载 SDK tar'
+        type: string
+        default: 'rolling'
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   Build-Custom-Patches:
@@ -32,33 +36,67 @@ jobs:
         with:
           path: build-config
 
-      - name: Login to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install host deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ccache file gawk gettext git jq \
+            libncurses-dev libssl-dev python3 rsync unzip wget xsltproc \
+            zlib1g-dev zstd
 
-      - name: Compile packages
+      - name: Download SDK tarball
         shell: bash
         env:
-          SDK_IMAGE: ${{ inputs.sdk_image }}
-          PACKAGES:  ${{ inputs.packages }}
-          ARCH:      ${{ inputs.arch }}
-          STRICT_VALIDATION: '0'
+          GH_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+          SDK_TAR_NAME:  ${{ inputs.sdk_tar_name }}
+          RELEASE_TAG:   ${{ inputs.release_tag }}
         run: |
-          set -euo pipefail
-          mkdir -p tier3-outputs pkg-out
+          set -e
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$SDK_TAR_NAME" \
+            --output "$SDK_TAR_NAME"
+          mkdir -p sdk-work
+          tar --use-compress-program=unzstd -xf "$SDK_TAR_NAME" \
+              -C sdk-work --strip-components=1
 
-          # Merge every device .config so defconfig 能解析 kmod 等设备级选项
-          # （Tier3 不实际编 kmod，但要让 defconfig 不报缺）
+      - name: Materialize package list + merged config
+        shell: bash
+        env:
+          PACKAGES: ${{ inputs.packages }}
+        run: |
+          set -e
+          jq -r '.[]' <<< "$PACKAGES" > missing.txt
+
+          # Tier3 不实际编 kmod,但需让 SDK defconfig 不报缺设备级 CONFIG
           : > combined.config
           find build-config/devices/ -name ".config" -exec cat {} + >> combined.config
 
-          jq -r '.[]' <<< "$PACKAGES" \
-            | bash build-config/scripts/build/compile-in-sdk.sh \
-                build-config "$SDK_IMAGE" pkg-out __all__ combined.config
+      - name: Prepare SDK feeds
+        shell: bash
+        run: |
+          bash build-config/scripts/sdk/prepare.sh \
+            --workdir sdk-work \
+            --conf-dir "$GITHUB_WORKSPACE/build-config" \
+            --device __all__ \
+            --packages missing.txt
 
+      - name: Compile missing packages
+        shell: bash
+        run: |
+          mkdir -p pkg-out
+          bash build-config/scripts/sdk/compile.sh \
+            --workdir sdk-work \
+            --packages missing.txt \
+            --seed-config combined.config \
+            --out pkg-out
+
+      - name: Collect arch-specific ipk/apk
+        shell: bash
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          mkdir -p tier3-outputs
           find "pkg-out/packages/${ARCH}" -type f \( -name '*.ipk' -o -name '*.apk' \) \
             -exec cp -v {} tier3-outputs/ \; 2>/dev/null || true
 

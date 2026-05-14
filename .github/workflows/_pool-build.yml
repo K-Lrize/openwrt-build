@@ -1,28 +1,31 @@
 name: "[Reusable] Package Pool Builder"
 
-# Reusable: per-target Pool 编译，按 chunk 切分并发，产物作为 artifact 上传。
-# 调用方应跟着调 _pool-finalize.yml 把所有 chunk 合成 packages-<source_slug> 镜像
-# （source_slug = slugify(repo)-slugify(ref)，避免不同 fork 撞 tag）。
+# Reusable: per-target Pool 编译,按 chunk 切分并发。SDK 来源走 rolling release
+# tarball (无 docker),消费链路全部 host-native:
+#   gh release download → tar -xf → sdk/prepare → pool/select-chunk → sdk/compile
 #
-# 输入合同：完整的 GHCR sdk_image tag + target/source slug 三件套。tag 由顶层
-# workflow 的 Initialize（用 scripts/lib/image-tags.sh）算好后透传过来，避免
-# slug 算法在多个 workflow 重复实现导致漂移。
+# 调用方 (pool-update.yml) 跟着调 _pool-finalize.yml 把所有 chunk 汇总,
+# 生成 pool-<arch>-<source>.tar.zst 推 release。
 
 on:
   workflow_call:
     inputs:
-      sdk_image:
-        description: '完整 GHCR SDK tag，如 ghcr.io/<owner>/<repo>:sdk-<target>-<source>'
+      sdk_tar_name:
+        description: 'SDK tarball asset 名 (asset-names.sh sdk_tar_name 算出)'
         type: string
         required: true
       target_slug:
-        description: 'slugify(target)，用于 artifact 命名 + 日志可读'
+        description: 'slugify(target),用于 artifact 命名 + 日志可读'
         type: string
         required: true
       source_slug:
-        description: 'source_slug(repo,ref) = repo_slug-ref_slug，用于 artifact 命名跨 run 区分'
+        description: 'source_slug(repo,ref) = repo_slug-ref_slug,用于 artifact 跨 run 区分'
         type: string
         required: true
+      release_tag:
+        description: '从哪个 release tag 下载 SDK tar (通常 rolling)'
+        type: string
+        default: 'rolling'
       strict:
         description: 'defconfig 后包名缺失时是否硬失败 (Pool 默认 true)'
         type: boolean
@@ -30,7 +33,6 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   Build-Global-Pool:
@@ -46,23 +48,60 @@ jobs:
         with:
           path: build-config
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install host deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ccache file gawk gettext git jq \
+            libncurses-dev libssl-dev python3 rsync unzip wget xsltproc \
+            zlib1g-dev zstd
+
+      - name: Download SDK tarball
+        shell: bash
+        env:
+          GH_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+          SDK_TAR_NAME:  ${{ inputs.sdk_tar_name }}
+          RELEASE_TAG:   ${{ inputs.release_tag }}
+        run: |
+          set -e
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$SDK_TAR_NAME" \
+            --output "$SDK_TAR_NAME"
+          mkdir -p sdk-work
+          tar --use-compress-program=unzstd -xf "$SDK_TAR_NAME" \
+              -C sdk-work --strip-components=1
+
+      - name: Select pool chunk
+        shell: bash
+        env:
+          CHUNK_ID: ${{ matrix.chunk }}
+        run: |
+          bash build-config/scripts/pool/select-chunk.sh \
+            --conf-dir build-config \
+            --chunk-id "$CHUNK_ID" \
+            --chunk-count 4 \
+            --output chunk.txt
+
+      - name: Prepare SDK feeds
+        shell: bash
+        run: |
+          bash build-config/scripts/sdk/prepare.sh \
+            --workdir sdk-work \
+            --conf-dir "$GITHUB_WORKSPACE/build-config" \
+            --packages chunk.txt
 
       - name: Compile pool chunk
         shell: bash
         env:
-          SDK_IMAGE: ${{ inputs.sdk_image }}
-          CHUNK_ID: ${{ matrix.chunk }}
-          STRICT_VALIDATION: ${{ inputs.strict && '1' || '0' }}
+          STRICT_FLAG: ${{ inputs.strict && '--strict' || '' }}
         run: |
           mkdir -p pool-out
-          bash build-config/scripts/ci/select-pool-chunk.sh build-config "$CHUNK_ID" 4 \
-            | bash build-config/scripts/build/compile-in-sdk.sh build-config "$SDK_IMAGE" pool-out ""
+          bash build-config/scripts/sdk/compile.sh \
+            --workdir sdk-work \
+            --packages chunk.txt \
+            --out pool-out \
+            $STRICT_FLAG
 
       - name: Upload pool chunk
         if: always()
