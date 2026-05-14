@@ -158,7 +158,7 @@ jobs:
       arch:          ${{ matrix.arch_data.key }}
       packages:      ${{ toJSON(matrix.arch_data.value) }}
       sdk_tar_name:  ${{ matrix.arch_data.sdk_tar_name }}
-      release_tag:   ${{ env.RELEASE_TAG }}
+      release_tag:   rolling
 
   Assemble-Firmware:
     name: Assemble firmware
@@ -174,7 +174,7 @@ jobs:
       arch:           ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].arch }}
       ib_tar_name:    ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_tar_name }}
       pool_tar_name:  ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].pool_tar_name }}
-      release_tag:    ${{ env.RELEASE_TAG }}
+      release_tag:    rolling
 
   Publish-Release:
     name: Publish release

@@ -72,7 +72,7 @@ jobs:
       sdk_tar_name:  ${{ matrix.entry.sdk_tar_name }}
       target_slug:   ${{ matrix.entry.target_slug }}
       source_slug:   ${{ needs.Initialize.outputs.source_slug }}
-      release_tag:   ${{ env.RELEASE_TAG }}
+      release_tag:   rolling
       strict:        ${{ inputs.strict }}
 
   Finalize-Pool:
@@ -84,5 +84,5 @@ jobs:
       first_target_sdk_tar_name: ${{ needs.Initialize.outputs.first_target_sdk_tar_name }}
       source_slug:               ${{ needs.Initialize.outputs.source_slug }}
       pool_manifest_name:        ${{ needs.Initialize.outputs.pool_manifest_name }}
-      release_tag:               ${{ env.RELEASE_TAG }}
+      release_tag:               rolling
       update_release:            ${{ inputs.update_release }}
