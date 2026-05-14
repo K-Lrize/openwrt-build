@@ -27,30 +27,51 @@
 #   - Pool tar:      pool-<arch_slug>-<source_slug>.tar.zst (按 arch 切分)
 #   - Pool manifest: pool-<source_slug>.manifest.txt (跨 arch 去重)
 #   - <source_slug>  = <repo_slug>-<ref_slug>,sloppy-fork 隔离
+#
+# 双层接口:
+#   *_name(target/arch, repo, ref)     — 高层,接受原始 repo+ref,内部算 source_slug
+#   *_name_with_slug(target/arch, slug)  — 低层,接受已算好的 source_slug;
+#                                          用于已持有 source_slug 的上下文 (如
+#                                          _pool-finalize.yml 通过 input 拿到 slug)
 
+sdk_tar_name_with_slug() {
+    local target="$1" slug="$2"
+    printf 'sdk-%s-%s.tar.zst\n' "$(slugify "$target")" "$slug"
+}
 sdk_tar_name() {
-    local target="$1" repo="$2" ref="$3"
-    printf 'sdk-%s-%s.tar.zst\n' "$(slugify "$target")" "$(source_slug "$repo" "$ref")"
+    sdk_tar_name_with_slug "$1" "$(source_slug "$2" "$3")"
 }
 
+ib_tar_name_with_slug() {
+    local target="$1" slug="$2"
+    printf 'ib-%s-%s.tar.zst\n' "$(slugify "$target")" "$slug"
+}
 ib_tar_name() {
-    local target="$1" repo="$2" ref="$3"
-    printf 'ib-%s-%s.tar.zst\n' "$(slugify "$target")" "$(source_slug "$repo" "$ref")"
+    ib_tar_name_with_slug "$1" "$(source_slug "$2" "$3")"
 }
 
+ib_manifest_name_with_slug() {
+    local target="$1" slug="$2"
+    printf 'ib-%s-%s.manifest.txt\n' "$(slugify "$target")" "$slug"
+}
 ib_manifest_name() {
-    local target="$1" repo="$2" ref="$3"
-    printf 'ib-%s-%s.manifest.txt\n' "$(slugify "$target")" "$(source_slug "$repo" "$ref")"
+    ib_manifest_name_with_slug "$1" "$(source_slug "$2" "$3")"
 }
 
+pool_tar_name_with_slug() {
+    local arch="$1" slug="$2"
+    printf 'pool-%s-%s.tar.zst\n' "$(slugify "$arch")" "$slug"
+}
 pool_tar_name() {
-    local arch="$1" repo="$2" ref="$3"
-    printf 'pool-%s-%s.tar.zst\n' "$(slugify "$arch")" "$(source_slug "$repo" "$ref")"
+    pool_tar_name_with_slug "$1" "$(source_slug "$2" "$3")"
 }
 
+pool_manifest_name_with_slug() {
+    local slug="$1"
+    printf 'pool-%s.manifest.txt\n' "$slug"
+}
 pool_manifest_name() {
-    local repo="$1" ref="$2"
-    printf 'pool-%s.manifest.txt\n' "$(source_slug "$repo" "$ref")"
+    pool_manifest_name_with_slug "$(source_slug "$1" "$2")"
 }
 
 # 拼 release asset 的下载 URL。owner/repo 通常来自 GITHUB_REPOSITORY,tag

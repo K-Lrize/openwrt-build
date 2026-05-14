@@ -82,12 +82,17 @@ extract_profile() {
 }
 
 # 输出 architecture（用于 ipk 命名/cache key），例如 "aarch64_cortex-a53"。
-# 种子 .config 没有此字段——靠 # @arch <value> 注释约定提供（Phase 4 引入）。
+#
+# 推导优先级:
+#   1. defconfig 后格式: CONFIG_TARGET_ARCH_PACKAGES="<arch>"
+#   2. 显式 override:    # @arch <value> 注释 (用于映射表外的稀有 target)
+#   3. 静态映射:         按 extract_target 结果 case → arch
+#                        加新 target 时在此 case 加一行,常见 device 无需写注释
 extract_arch() {
     local config="$1"
     [ -f "$config" ] || return 0
 
-    # defconfig 后格式优先
+    # 1. defconfig 后格式优先
     local arch
     arch=$(grep -E '^CONFIG_TARGET_ARCH_PACKAGES=' "$config" | cut -d'"' -f2)
     if [ -n "$arch" ]; then
@@ -95,9 +100,16 @@ extract_arch() {
         return 0
     fi
 
-    # 种子格式 fallback：# @arch <value>
-    grep -E '^#[[:space:]]*@arch[[:space:]]+' "$config" \
-        | head -1 \
-        | awk '{print $3}' \
-        || true
+    # 2. 显式 # @arch 注释 override
+    arch=$(grep -E '^#[[:space:]]*@arch[[:space:]]+' "$config" \
+            | head -1 | awk '{print $3}')
+    if [ -n "$arch" ]; then
+        echo "$arch"
+        return 0
+    fi
+
+    # 3. 已知 target → arch 静态映射 (加新 target 时补一行 case)
+    case "$(extract_target "$config")" in
+        mediatek/filogic)   echo "aarch64_cortex-a53" ;;
+    esac
 }

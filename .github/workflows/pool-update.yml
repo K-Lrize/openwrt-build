@@ -45,7 +45,7 @@ jobs:
       target_matrix_with_meta:    ${{ steps.matrix.outputs.target_matrix_with_meta }}
       source_slug:                ${{ steps.matrix.outputs.source_slug }}
       pool_manifest_name:         ${{ steps.matrix.outputs.pool_manifest_name }}
-      first_target_sdk_tar_name:  ${{ steps.matrix.outputs.first_target_sdk_tar_name }}
+      indexer_sdk_tar_name:  ${{ steps.matrix.outputs.indexer_sdk_tar_name }}
       has_builds:                 ${{ steps.matrix.outputs.has_builds }}
     steps:
       - name: Checkout
@@ -80,7 +80,7 @@ jobs:
     if: needs.Initialize.outputs.has_builds == 'true'
     uses: ./.github/workflows/_pool-finalize.yml
     with:
-      first_target_sdk_tar_name: ${{ needs.Initialize.outputs.first_target_sdk_tar_name }}
+      indexer_sdk_tar_name: ${{ needs.Initialize.outputs.indexer_sdk_tar_name }}
       source_slug:               ${{ needs.Initialize.outputs.source_slug }}
       pool_manifest_name:        ${{ needs.Initialize.outputs.pool_manifest_name }}
       base_release_tag:          base-rolling

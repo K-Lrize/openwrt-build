@@ -6,21 +6,28 @@
 #   OPENWRT_REF           上游分支/tag/sha (eg. main)
 #   GITHUB_REPOSITORY     owner/repo (GHA 内置)
 #
-# 输出 GHA outputs:
-#   device_matrix:               ["mt3600be"]
-#   arch_matrix:                 ["aarch64_cortex-a53"]
-#   target_matrix:               ["mediatek/filogic"]
-#   target_matrix_with_meta:     [{target, target_slug, sdk_tar_name, ib_tar_name, ib_manifest_name}]
-#   device_meta:                 {"mt3600be": {arch, target, target_slug, profile,
-#                                              sdk_tar_name, ib_tar_name, ib_manifest_name,
-#                                              pool_tar_name}}
-#   device_list:                 "mt3600be"
-#   source_slug:                 "K-Lrize-openwrt-main"
-#   ref_slug:                    "main"
-#   owner_lc, repo_name_lc:
-#   pool_manifest_name:          "pool-K-Lrize-openwrt-main.manifest.txt"  (跨 arch 单文件)
-#   first_target_sdk_tar_name:   首个 target 的 SDK tar 名 (供 finalize 借 ipkg-make-index.sh)
-#   has_builds:                  true/false
+# 输出 GHA outputs (8 个,均有消费方;改输出列表前请先 grep 确认):
+#   device_matrix             ["mt3600be"]
+#                             消费方: firmware.yml.Analyze-Diff / Assemble-Firmware matrix
+#                                     validate.yml.Validate matrix
+#   target_matrix             ["mediatek/filogic"]
+#                             消费方: base.yml.Build-Base matrix
+#   target_matrix_with_meta   [{target, target_slug, sdk_tar_name, ib_tar_name, ib_manifest_name}]
+#                             消费方: pool-update.yml.Build-Pool matrix
+#   device_meta               {"mt3600be": {arch, target, target_slug, profile,
+#                                           sdk_tar_name, ib_tar_name, ib_manifest_name,
+#                                           pool_tar_name}}
+#                             消费方: firmware.yml Analyze-Diff env / Compile-Patches inputs /
+#                                     Assemble-Firmware inputs
+#   source_slug               "K-Lrize-openwrt-main"
+#                             消费方: base/firmware/pool-update artifact pattern + 命名
+#   pool_manifest_name        "pool-K-Lrize-openwrt-main.manifest.txt"  (跨 arch 单文件)
+#                             消费方: firmware.yml Analyze-Diff + _pool-finalize.yml
+#   indexer_sdk_tar_name      任选一个 SDK tar 名 (_pool-finalize.yml 借 ipkg-make-index.sh
+#                             与 host bin 的 apk;ipkg-make-index 跨 target 同构)
+#                             消费方: _pool-finalize.yml
+#   has_builds                true/false
+#                             消费方: firmware/pool-update/validate 的 job if
 
 set -euo pipefail
 
@@ -121,25 +128,19 @@ if [ ${#BUILD_LIST[@]} -eq 0 ]; then
     echo "构建矩阵为空,无需构建。"
     {
         echo "device_matrix=[]"
-        echo "arch_matrix=[]"
         echo "target_matrix=[]"
         echo "target_matrix_with_meta=[]"
         echo "device_meta={}"
-        echo "device_list="
         echo "source_slug=${SRC_SLUG}"
-        echo "ref_slug=${REF_SLUG}"
         echo "pool_manifest_name=${POOL_MANIFEST_NAME}"
-        echo "first_target_sdk_tar_name="
-        echo "owner_lc=${OWNER_LC}"
-        echo "repo_name_lc=${REPO_NAME_LC}"
+        echo "indexer_sdk_tar_name="
         echo "has_builds=false"
     } >> "$GITHUB_OUTPUT"
     exit 0
 fi
 
-# 4. 构造 device_meta + 收集 arch & target 集合
+# 4. 构造 device_meta + 收集 target 集合
 device_meta='{}'
-arch_set=()
 target_set=()
 
 for dev in "${BUILD_LIST[@]}"; do
@@ -153,7 +154,10 @@ for dev in "${BUILD_LIST[@]}"; do
     ib_tar=$(ib_tar_name        "$target" "$OPENWRT_REPO" "$OPENWRT_REF")
     ib_manifest=$(ib_manifest_name "$target" "$OPENWRT_REPO" "$OPENWRT_REF")
 
-    [ -z "$arch" ] && { echo "::warning::device ${dev} 缺 # @arch 注释,arch 设为 unknown"; arch="unknown"; }
+    if [ -z "$arch" ]; then
+        echo "::warning::device ${dev} (target=${target}) 推不出 arch — 在 scripts/lib/extract-config.sh 的 case 加映射,或在 .config 顶部写 '# @arch <name>'。"
+        arch="unknown"
+    fi
     pool_tar=$(pool_tar_name "$arch" "$OPENWRT_REPO" "$OPENWRT_REF")
 
     dev_meta=$(jq -n \
@@ -179,12 +183,10 @@ for dev in "${BUILD_LIST[@]}"; do
     device_meta=$(jq -c --arg dev "$dev" --argjson meta "$dev_meta" \
         '. + {($dev): $meta}' <<< "$device_meta")
 
-    arch_set+=("$arch")
     target_set+=("$target")
 done
 
-# 5. arch & target 去重
-mapfile -t arch_list < <(printf '%s\n' "${arch_set[@]}" | sort -u)
+# 5. target 去重
 mapfile -t target_list < <(printf '%s\n' "${target_set[@]}" | sort -u)
 
 # 6. per-target metadata (驱动 base.yml / pool-update.yml 的矩阵)
@@ -210,32 +212,23 @@ done
 
 # 7. 序列化 + 输出
 device_matrix_json=$(printf '%s\n' "${BUILD_LIST[@]}" | jq -R . | jq -s -c .)
-arch_matrix_json=$(printf '%s\n' "${arch_list[@]}" | jq -R . | jq -s -c .)
 target_matrix_json=$(printf '%s\n' "${target_list[@]}" | jq -R . | jq -s -c .)
-device_list=$(printf '%s, ' "${BUILD_LIST[@]}"); device_list="${device_list%, }"
 
 {
     echo "device_matrix=${device_matrix_json}"
-    echo "arch_matrix=${arch_matrix_json}"
     echo "target_matrix=${target_matrix_json}"
     echo "target_matrix_with_meta=${target_meta}"
     echo "device_meta=${device_meta}"
-    echo "device_list=${device_list}"
     echo "source_slug=${SRC_SLUG}"
-    echo "ref_slug=${REF_SLUG}"
     echo "pool_manifest_name=${POOL_MANIFEST_NAME}"
-    echo "first_target_sdk_tar_name=${first_sdk_tar}"
-    echo "owner_lc=${OWNER_LC}"
-    echo "repo_name_lc=${REPO_NAME_LC}"
+    echo "indexer_sdk_tar_name=${first_sdk_tar}"
     echo "has_builds=true"
 } >> "$GITHUB_OUTPUT"
 
-echo "device_matrix:              ${device_matrix_json}"
-echo "arch_matrix:                ${arch_matrix_json}"
-echo "target_matrix:              ${target_matrix_json}"
-echo "target_matrix_with_meta:    ${target_meta}"
-echo "device_meta:                ${device_meta}"
-echo "device_list:                ${device_list}"
-echo "source_slug:                ${SRC_SLUG}"
-echo "pool_manifest_name:         ${POOL_MANIFEST_NAME}"
-echo "first_target_sdk_tar_name:  ${first_sdk_tar}"
+echo "device_matrix:            ${device_matrix_json}"
+echo "target_matrix:            ${target_matrix_json}"
+echo "target_matrix_with_meta:  ${target_meta}"
+echo "device_meta:              ${device_meta}"
+echo "source_slug:              ${SRC_SLUG}"
+echo "pool_manifest_name:       ${POOL_MANIFEST_NAME}"
+echo "indexer_sdk_tar_name:     ${first_sdk_tar}"

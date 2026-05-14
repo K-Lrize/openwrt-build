@@ -9,7 +9,7 @@ name: "[Reusable] Package Pool Finalizer"
 on:
   workflow_call:
     inputs:
-      first_target_sdk_tar_name:
+      indexer_sdk_tar_name:
         description: 'finalize 用的 SDK tar asset 名 (任选一个 target,用于借 ipkg-make-index.sh)'
         type: string
         required: true
@@ -62,7 +62,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
-          SDK_TAR_NAME:  ${{ inputs.first_target_sdk_tar_name }}
+          SDK_TAR_NAME:  ${{ inputs.indexer_sdk_tar_name }}
           RELEASE_TAG:   ${{ inputs.base_release_tag }}
         run: |
           set -e
@@ -96,6 +96,10 @@ jobs:
           SOURCE_SLUG:        ${{ inputs.source_slug }}
         run: |
           set -e
+          # 命名规则单点 — pool tar 名走 asset-names.sh,改命名只动 lib
+          source scripts/lib/slugify.sh
+          source scripts/lib/asset-names.sh
+
           mkdir -p release-staging
 
           if [ ! -d pool ] || [ -z "$(find pool/ -mindepth 1 -maxdepth 1 -type d 2>/dev/null)" ]; then
@@ -106,7 +110,7 @@ jobs:
 
           for arch_dir in pool/*/; do
             arch="$(basename "$arch_dir")"
-            tar_name="pool-${arch}-${SOURCE_SLUG}.tar.zst"
+            tar_name="$(pool_tar_name_with_slug "$arch" "$SOURCE_SLUG")"
             echo "::group::打包 ${arch} → ${tar_name}"
             tar --use-compress-program='zstd -T0 -3' \
                 -cf "release-staging/${tar_name}" \

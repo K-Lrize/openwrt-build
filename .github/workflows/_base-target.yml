@@ -21,17 +21,6 @@ on:
       target:
         type: string
         required: true
-    outputs:
-      source_slug:
-        value: ${{ jobs.Build-Base-Infrastructure.outputs.source_slug }}
-      target_slug:
-        value: ${{ jobs.Build-Base-Infrastructure.outputs.target_slug }}
-      sdk_tar_name:
-        value: ${{ jobs.Build-Base-Infrastructure.outputs.sdk_tar_name }}
-      ib_tar_name:
-        value: ${{ jobs.Build-Base-Infrastructure.outputs.ib_tar_name }}
-      ib_manifest_name:
-        value: ${{ jobs.Build-Base-Infrastructure.outputs.ib_manifest_name }}
 
 permissions:
   contents: write
@@ -40,12 +29,6 @@ jobs:
   Build-Base-Infrastructure:
     name: Build base
     runs-on: ubuntu-24.04
-    outputs:
-      source_slug:       ${{ steps.slugs.outputs.source_slug }}
-      target_slug:       ${{ steps.slugs.outputs.target_slug }}
-      sdk_tar_name:      ${{ steps.slugs.outputs.sdk_tar_name }}
-      ib_tar_name:       ${{ steps.slugs.outputs.ib_tar_name }}
-      ib_manifest_name:  ${{ steps.slugs.outputs.ib_manifest_name }}
 
     steps:
       - name: Free disk

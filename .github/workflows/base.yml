@@ -29,36 +29,26 @@ jobs:
     name: Prepare
     runs-on: ubuntu-24.04
     outputs:
-      target_matrix:              ${{ steps.matrix.outputs.target_matrix }}
-      target_matrix_with_meta:    ${{ steps.matrix.outputs.target_matrix_with_meta }}
-      source_slug:                ${{ steps.matrix.outputs.source_slug }}
-      pool_manifest_name:         ${{ steps.matrix.outputs.pool_manifest_name }}
-      first_target_sdk_tar_name:  ${{ steps.matrix.outputs.first_target_sdk_tar_name }}
-      owner_lc:                   ${{ steps.matrix.outputs.owner_lc }}
-      repo_name_lc:               ${{ steps.matrix.outputs.repo_name_lc }}
-      openwrt_ref:                ${{ steps.echo.outputs.openwrt_ref }}
-      openwrt_repo:               ${{ steps.echo.outputs.openwrt_repo }}
+      target_matrix:  ${{ steps.matrix.outputs.target_matrix }}
+      source_slug:    ${{ steps.matrix.outputs.source_slug }}
+      openwrt_ref:    ${{ steps.matrix.outputs.openwrt_ref }}
+      openwrt_repo:   ${{ steps.matrix.outputs.openwrt_repo }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Echo source inputs
-        id: echo
-        shell: bash
-        run: |
-          openwrt_ref="${{ inputs.openwrt_ref || env.DEFAULT_OPENWRT_REF }}"
-          openwrt_repo="${{ inputs.openwrt_repo || env.DEFAULT_OPENWRT_REPO }}"
-          {
-            echo "openwrt_ref=${openwrt_ref}"
-            echo "openwrt_repo=${openwrt_repo}"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Build matrix
         id: matrix
         env:
-          OPENWRT_REPO: ${{ steps.echo.outputs.openwrt_repo }}
-          OPENWRT_REF:  ${{ steps.echo.outputs.openwrt_ref }}
-        run: bash scripts/ci/calculate-matrix.sh
+          OPENWRT_REPO: ${{ inputs.openwrt_repo || env.DEFAULT_OPENWRT_REPO }}
+          OPENWRT_REF:  ${{ inputs.openwrt_ref || env.DEFAULT_OPENWRT_REF }}
+        run: |
+          {
+            echo "openwrt_repo=${OPENWRT_REPO}"
+            echo "openwrt_ref=${OPENWRT_REF}"
+          } >> "$GITHUB_OUTPUT"
+
+          bash scripts/ci/calculate-matrix.sh
 
   Build-Base:
     name: Build base
