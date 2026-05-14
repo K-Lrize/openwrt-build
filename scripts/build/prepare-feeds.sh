@@ -62,5 +62,13 @@ echo "::endgroup::"
 
 echo "::group::更新并安装 Feeds"
 ./scripts/feeds update -a
-./scripts/feeds install -a
+# 若调用方传入包名文件（第 2 参数），则只安装指定包，避免 feeds install -a
+# 将 base-packages/ 等全量包注册进构建系统，进而被 make defconfig 的 default m
+# 逻辑大量展开，导致 SDK 编译时把几百个无关包全部编译（llvm/chicken-scheme 等）。
+if [[ -n "${2:-}" && -f "$2" ]]; then
+    echo "按需安装 Feeds（仅限指定包清单）..."
+    xargs ./scripts/feeds install < "$2"
+else
+    ./scripts/feeds install -a
+fi
 echo "::endgroup::"

@@ -69,7 +69,8 @@ docker run --rm "${DOCKER_MOUNTS[@]}" -w /home/builder \
     -e STRICT_VALIDATION="$STRICT_VALIDATION" \
     "$SDK_IMAGE" bash -euo pipefail -c '
 
-    bash /build-config/scripts/build/prepare-feeds.sh "$FEEDS_ARG"
+    # 只安装请求包（而非 -a），避免 base-packages/ 等全量包通过 default m 被 defconfig 展开
+    bash /build-config/scripts/build/prepare-feeds.sh "$FEEDS_ARG" /output/.requested-packages
 
     echo "::group::种子 .config 拼装"
     # (a) 起点：CONFIG_SEED（如果给定）覆盖 SDK 自带 .config；否则保留 SDK 默认
