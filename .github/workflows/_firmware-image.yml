@@ -21,10 +21,14 @@ on:
         description: 'Pool tarball asset 名 (从 device_meta.pool_tar_name 取)'
         type: string
         required: true
-      release_tag:
-        description: '从哪个 release tag 下载 IB / pool tar'
+      base_release_tag:
+        description: '从哪个 release 下载 IB tar (Base 层)'
         type: string
-        default: 'rolling'
+        default: 'base-rolling'
+      pool_release_tag:
+        description: '从哪个 release 下载 pool tar (Pool 层)'
+        type: string
+        default: 'pool-rolling'
 
 permissions:
   contents: read
@@ -58,7 +62,7 @@ jobs:
         env:
           GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
           IB_TAR_NAME:  ${{ inputs.ib_tar_name }}
-          RELEASE_TAG:  ${{ inputs.release_tag }}
+          RELEASE_TAG:  ${{ inputs.base_release_tag }}
         run: |
           set -e
           gh release download "$RELEASE_TAG" \
@@ -74,7 +78,7 @@ jobs:
         env:
           GH_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
           POOL_TAR_NAME:   ${{ inputs.pool_tar_name }}
-          RELEASE_TAG:     ${{ inputs.release_tag }}
+          RELEASE_TAG:     ${{ inputs.pool_release_tag }}
         run: |
           set -e
           mkdir -p tier2-packages

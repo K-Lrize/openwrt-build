@@ -8,7 +8,8 @@
 #   4. 输出 GHA Matrix JSON 驱动 _firmware-packages.yml 的 per-arch 矩阵
 #
 # 输出格式:
-#   matrix=[{"key":"<arch>","value":["pkg1","pkg2",...],"target_slug":"<slug>"}, ...]
+#   matrix=[{"key":"<arch>","value":["pkg1","pkg2",...],
+#            "target_slug":"<slug>","sdk_tar_name":"<asset>","ib_tar_name":"<asset>"}, ...]
 #
 # 用法:
 #   bash merge-missing-info.sh <missing_info_dir> <device_meta_json>

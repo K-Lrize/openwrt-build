@@ -22,10 +22,10 @@ on:
         description: 'source_slug(repo,ref) = repo_slug-ref_slug,用于 artifact 跨 run 区分'
         type: string
         required: true
-      release_tag:
-        description: '从哪个 release tag 下载 SDK tar (通常 rolling)'
+      base_release_tag:
+        description: '从哪个 release tag 下载 SDK tar (Base 层)'
         type: string
-        default: 'rolling'
+        default: 'base-rolling'
       strict:
         description: 'defconfig 后包名缺失时是否硬失败 (Pool 默认 true)'
         type: boolean
@@ -61,7 +61,7 @@ jobs:
         env:
           GH_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
           SDK_TAR_NAME:  ${{ inputs.sdk_tar_name }}
-          RELEASE_TAG:   ${{ inputs.release_tag }}
+          RELEASE_TAG:   ${{ inputs.base_release_tag }}
         run: |
           set -e
           gh release download "$RELEASE_TAG" \

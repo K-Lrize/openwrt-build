@@ -15,7 +15,7 @@
 # 设计:
 #   - merge:  多文件合并,按首次出现顺序去重(stable),不重排
 #   - chunk:  按 (NR-1) % total == chunk_id 取片,保持顺序
-#     与现有 scripts/ci/select-pool-chunk.sh:44 算法等价,行为零回归。
+#     与旧 scripts/ci/select-pool-chunk.sh:44 算法等价,迁移行为零回归。
 #     未来如需 hash-based 稳定切分,独立 PR 切换。
 
 pkg_list_merge_unique() {

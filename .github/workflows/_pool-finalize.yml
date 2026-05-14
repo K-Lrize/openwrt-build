@@ -21,10 +21,14 @@ on:
         description: '跨 arch pool manifest sidecar 文件名'
         type: string
         required: true
-      release_tag:
-        description: '把 pool tar + manifest 附到哪个 Release tag'
+      base_release_tag:
+        description: '从哪个 release 下载 SDK indexer (Base 层)'
         type: string
-        default: 'rolling'
+        default: 'base-rolling'
+      pool_release_tag:
+        description: '把 pool tar + manifest 推到哪个 release (Pool 层)'
+        type: string
+        default: 'pool-rolling'
       update_release:
         description: '是否真的推到 Release (false 时只 dry-run)'
         type: boolean
@@ -59,7 +63,7 @@ jobs:
         env:
           GH_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
           SDK_TAR_NAME:  ${{ inputs.first_target_sdk_tar_name }}
-          RELEASE_TAG:   ${{ inputs.release_tag }}
+          RELEASE_TAG:   ${{ inputs.base_release_tag }}
         run: |
           set -e
           gh release download "$RELEASE_TAG" \
@@ -119,11 +123,11 @@ jobs:
             | sort -u > "release-staging/${POOL_MANIFEST_NAME}"
           echo "pool manifest 包数量: $(wc -l < release-staging/${POOL_MANIFEST_NAME} | tr -d ' ')"
 
-      - name: Update rolling release
+      - name: Update pool release
         if: ${{ inputs.update_release }}
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ inputs.release_tag }}
+          tag_name: ${{ inputs.pool_release_tag }}
           files: release-staging/*
           prerelease: true
-          make_latest: true
+          make_latest: false

@@ -8,7 +8,7 @@ permissions:
   actions: read
 
 env:
-  RELEASE_TAG: rolling
+  BASE_RELEASE_TAG: base-rolling
   DEFAULT_OPENWRT_REF: main
   DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
 
@@ -90,14 +90,14 @@ jobs:
           path: infra-assets/
           merge-multiple: true
 
-      - name: Update rolling release
+      - name: Update base release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
+          tag_name: ${{ env.BASE_RELEASE_TAG }}
           files: |
             infra-assets/**/*
           prerelease: true
-          make_latest: true
+          make_latest: false
 
   # Pool 编译已物理拆出到 pool-update.yml（独立 workflow_dispatch run）。
   # GHA 不允许 reusable workflow caller 加 continue-on-error，本 job 用 gh CLI

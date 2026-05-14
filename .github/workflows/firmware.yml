@@ -4,11 +4,12 @@ name: "[Build] Incremental Firmware"
 
 permissions:
   contents: write
-  packages: write
   actions: read
 
 env:
-  RELEASE_TAG: rolling
+  BASE_RELEASE_TAG: base-rolling
+  POOL_RELEASE_TAG: pool-rolling
+  FIRMWARE_RELEASE_TAG: firmware-rolling
   DEFAULT_OPENWRT_REF: main
   DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
 
@@ -84,17 +85,18 @@ jobs:
           GH_TOKEN:            ${{ secrets.GITHUB_TOKEN }}
           IB_MANIFEST_NAME:    ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_manifest_name }}
           POOL_MANIFEST_NAME:  ${{ needs.Initialize.outputs.pool_manifest_name }}
-          RELEASE_TAG:         ${{ env.RELEASE_TAG }}
+          BASE_RELEASE_TAG:    ${{ env.BASE_RELEASE_TAG }}
+          POOL_RELEASE_TAG:    ${{ env.POOL_RELEASE_TAG }}
         run: |
           set -e
           # Tier1: IB sidecar manifest (强依赖,缺则 fail)
-          gh release download "$RELEASE_TAG" \
+          gh release download "$BASE_RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --pattern "$IB_MANIFEST_NAME" \
             --output ib.manifest.txt
 
           # Tier2: Pool sidecar manifest (软依赖,首次构建可能还没 pool)
-          if ! gh release download "$RELEASE_TAG" \
+          if ! gh release download "$POOL_RELEASE_TAG" \
                  --repo "$GITHUB_REPOSITORY" \
                  --pattern "$POOL_MANIFEST_NAME" \
                  --output pool.manifest.txt 2>/dev/null; then
@@ -155,10 +157,10 @@ jobs:
         arch_data: ${{ fromJSON(needs.Aggregate-Patches.outputs.arch_packages_matrix) }}
     uses: ./.github/workflows/_firmware-packages.yml
     with:
-      arch:          ${{ matrix.arch_data.key }}
-      packages:      ${{ toJSON(matrix.arch_data.value) }}
-      sdk_tar_name:  ${{ matrix.arch_data.sdk_tar_name }}
-      release_tag:   rolling
+      arch:              ${{ matrix.arch_data.key }}
+      packages:          ${{ toJSON(matrix.arch_data.value) }}
+      sdk_tar_name:      ${{ matrix.arch_data.sdk_tar_name }}
+      base_release_tag:  base-rolling
 
   Assemble-Firmware:
     name: Assemble firmware
@@ -170,11 +172,12 @@ jobs:
         device: ${{ fromJSON(needs.Initialize.outputs.device_matrix) }}
     uses: ./.github/workflows/_firmware-image.yml
     with:
-      device:         ${{ matrix.device }}
-      arch:           ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].arch }}
-      ib_tar_name:    ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_tar_name }}
-      pool_tar_name:  ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].pool_tar_name }}
-      release_tag:    rolling
+      device:            ${{ matrix.device }}
+      arch:              ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].arch }}
+      ib_tar_name:       ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_tar_name }}
+      pool_tar_name:     ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].pool_tar_name }}
+      base_release_tag:  base-rolling
+      pool_release_tag:  pool-rolling
 
   Publish-Release:
     name: Publish release
@@ -191,10 +194,10 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
-      - name: Update rolling release
+      - name: Update firmware release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
+          tag_name: ${{ env.FIRMWARE_RELEASE_TAG }}
           files: artifacts/**/*
           prerelease: true
           make_latest: true

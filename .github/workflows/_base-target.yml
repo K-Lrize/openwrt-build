@@ -203,7 +203,7 @@ jobs:
           fi
 
           SDK_DIR="$(ls /tmp/sdk-inject | head -1)"
-          # 注入 base 源 — prepare-feeds.sh/sdk/prepare.sh 检测到 ./base-packages 自动注入 src-link
+          # 注入 base 源 — sdk/prepare.sh 检测到 ./base-packages 自动注入 src-link
           mkdir -p "/tmp/sdk-inject/${SDK_DIR}/base-packages"
           cp -ra package/* "/tmp/sdk-inject/${SDK_DIR}/base-packages/"
           # 软链可能指向主源外部,清理掉确保 SDK 自给自足

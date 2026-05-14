@@ -16,7 +16,6 @@ permissions:
 env:
   DEFAULT_OPENWRT_REF: main
   DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
-  RELEASE_TAG: rolling
 
 on:
   workflow_dispatch:
@@ -69,11 +68,11 @@ jobs:
         entry: ${{ fromJSON(needs.Initialize.outputs.target_matrix_with_meta) }}
     uses: ./.github/workflows/_pool-build.yml
     with:
-      sdk_tar_name:  ${{ matrix.entry.sdk_tar_name }}
-      target_slug:   ${{ matrix.entry.target_slug }}
-      source_slug:   ${{ needs.Initialize.outputs.source_slug }}
-      release_tag:   rolling
-      strict:        ${{ inputs.strict }}
+      sdk_tar_name:      ${{ matrix.entry.sdk_tar_name }}
+      target_slug:       ${{ matrix.entry.target_slug }}
+      source_slug:       ${{ needs.Initialize.outputs.source_slug }}
+      base_release_tag:  base-rolling
+      strict:            ${{ inputs.strict }}
 
   Finalize-Pool:
     name: Finalize pool
@@ -84,5 +83,6 @@ jobs:
       first_target_sdk_tar_name: ${{ needs.Initialize.outputs.first_target_sdk_tar_name }}
       source_slug:               ${{ needs.Initialize.outputs.source_slug }}
       pool_manifest_name:        ${{ needs.Initialize.outputs.pool_manifest_name }}
-      release_tag:               rolling
+      base_release_tag:          base-rolling
+      pool_release_tag:          pool-rolling
       update_release:            ${{ inputs.update_release }}

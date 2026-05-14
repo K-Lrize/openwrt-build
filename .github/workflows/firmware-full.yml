@@ -74,7 +74,9 @@ jobs:
 
       - name: Prepare feeds and files
         run: |
-          bash "${CONFIG_REPO_DIR}/scripts/build/prepare-feeds.sh" "${DEVICE}"
+          bash "${CONFIG_REPO_DIR}/scripts/sdk/prepare.sh" \
+            --workdir . \
+            --device "${DEVICE}"
           cp "${CONFIG_REPO_DIR}/devices/${DEVICE}/.config" .config
           bash "${CONFIG_REPO_DIR}/scripts/build/merge-assets.sh" "${DEVICE}"
 
