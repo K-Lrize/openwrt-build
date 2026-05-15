@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
 # scripts/ib/prepare-repo.sh
 #
-# 在「已解压的 ImageBuilder workdir」内把外部 ipk/apk 注册为本地最高优先级源:
-#   1. 把 packages 目录下所有 ipk/apk 复制到 workdir/local_repo/
-#   2. 生成 Packages.gz / APKINDEX.tar.gz (复用 scripts/sdk/index.sh)
-#   3. 在 IB 的 repo 配置文件(opkg: repositories.conf / apk: repositories)
-#      第一行注入本地源,确保本地源比远程 feed 优先。
+# 把外部 ipk/apk(Tier2 pool + Tier3 补编)注入已解压的 ImageBuilder workdir。
 #
-# 取代旧 _firmware-image.yml:95-108 在 docker IB 容器内跑的那一段。
+# 现代 OpenWrt IB (2024-12 切到 APK 之后,且 _base-target.yml 用 CONFIG_IB_STANDALONE=y)
+# 顶层不再有 repositories.conf / repositories 文件 — IB Makefile 的 APK 命令是:
+#
+#   APK := apk ... \
+#          $(if $(CONFIG_IB_STANDALONE),,--repositories-file $(TOPDIR)/repositories) \
+#          --repository $(PACKAGE_DIR)/packages.adb \
+#          $(if $(CONFIG_SIGNATURE_CHECK),,--allow-untrusted) \
+#
+# STANDALONE 模式下完全只看 $TOPDIR/packages/packages.adb,不读外部 repo。
+# 而 IB Makefile 自带 `package_index` target,build 时会检测 packages/ 下文件是否
+# 比 packages.adb 新,如新则自动重 index(见上游 target/imagebuilder/files/Makefile:201-236)。
+#
+# 因此本脚本只需:
+#   1. 校验 $WORKDIR 是 IB 根 (有 Makefile + packages/)
+#   2. 把 $PACKAGES_DIR 下的 ipk/apk 复制进 $WORKDIR/packages/
+#   3. 把 packages.adb / Packages.gz 的 mtime 倒回过去,确保 IB 触发重 index
 #
 # 用法:
 #   ib/prepare-repo.sh \
@@ -15,8 +26,6 @@
 #       --packages-dir <DIR>         必填,tier2 + tier3 合并后的 ipk/apk 目录 (扁平)
 
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 WORKDIR=""
 PACKAGES_DIR=""
@@ -42,54 +51,34 @@ done
 WORKDIR="$(cd "$WORKDIR" && pwd)"
 PACKAGES_DIR="$(cd "$PACKAGES_DIR" && pwd)"
 
-# 自动识别 IB 风格:
-#   opkg 时代: $WORKDIR/repositories.conf,语法 'src/gz <name> <url>'
-#   apk  时代: $WORKDIR/repositories     ,语法 '<url>' 一行一个
-# OpenWrt main 自 2024-12 切到 APK,IB tar 内顶层文件改名为 'repositories'。
-REPO_FILE=""
-REPO_STYLE=""
-if   [ -f "$WORKDIR/repositories.conf" ]; then
-    REPO_FILE="$WORKDIR/repositories.conf"
-    REPO_STYLE="opkg"
-elif [ -f "$WORKDIR/repositories" ]; then
-    REPO_FILE="$WORKDIR/repositories"
-    REPO_STYLE="apk"
-else
-    echo "::error::ib/prepare-repo: $WORKDIR 不像 IB 根 (既无 repositories.conf 也无 repositories)" >&2
+if [ ! -f "$WORKDIR/Makefile" ] || [ ! -d "$WORKDIR/packages" ]; then
+    echo "::error::ib/prepare-repo: $WORKDIR 不像 IB 根 (缺 Makefile 或 packages/)" >&2
     echo "::group::ib-root listing"
     ls -la "$WORKDIR" >&2 || true
     echo "::endgroup::"
     exit 1
 fi
-echo "ib/prepare-repo: 检测到 $REPO_STYLE 风格 IB ($REPO_FILE)"
 
-mkdir -p "$WORKDIR/local_repo"
+# 把外部 ipk/apk 平铺复制进 IB 的 PACKAGE_DIR。
+# IB 的 packages/ 本来就是单一目录(IB tar 自带预编译的 base 包),追加即可。
+copied=0
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    cp -f "$f" "$WORKDIR/packages/"
+    copied=$((copied + 1))
+done < <(find "$PACKAGES_DIR" -maxdepth 4 -type f \( -name '*.ipk' -o -name '*.apk' \))
 
-# 复制全部 ipk/apk 到 local_repo (扁平结构,IB 本地源不分 arch/feed)
-find "$PACKAGES_DIR" -type f \( -name "*.ipk" -o -name "*.apk" \) \
-    -exec cp -v {} "$WORKDIR/local_repo/" \; 2>/dev/null \
-    | sed 's|^|  |' \
-    || true
-
-if [ -z "$(find "$WORKDIR/local_repo" -maxdepth 1 -type f \( -name "*.ipk" -o -name "*.apk" \) 2>/dev/null)" ]; then
-    echo "::warning::ib/prepare-repo: $PACKAGES_DIR 下无 ipk/apk,跳过 local_repo 注入。"
-    rmdir "$WORKDIR/local_repo" 2>/dev/null || true
+if [ "$copied" -eq 0 ]; then
+    echo "::warning::ib/prepare-repo: $PACKAGES_DIR 下无 ipk/apk,无文件注入。"
     exit 0
 fi
 
-# 生成索引 (借 IB 自带的 ipkg-make-index.sh,IB tar 通常包含它)
-bash "$SCRIPT_DIR/../sdk/index.sh" --pool-dir "$WORKDIR/local_repo" --sdk-dir "$WORKDIR"
+# 倒回 index 的 mtime,确保 IB Makefile 第 220-236 行的"新于 index 就重跑"判定生效。
+# (cp -f 已经更新了被覆盖文件的 mtime,但新增包则不会改 index 文件本身。)
+for idx in packages.adb Packages Packages.gz Packages.sig packages.adb.sig; do
+    if [ -f "$WORKDIR/packages/$idx" ]; then
+        touch -d '1970-01-01' "$WORKDIR/packages/$idx" 2>/dev/null || true
+    fi
+done
 
-# 注入到 repo 文件第一行 — local 必须比远程 feed 优先
-case "$REPO_STYLE" in
-    # opkg 接受 file:// URL;apk-tools 只认裸文件系统路径或 http(s):// URL。
-    opkg) LOCAL_LINE="src/gz local file://$WORKDIR/local_repo" ;;
-    apk)  LOCAL_LINE="$WORKDIR/local_repo" ;;
-esac
-if ! grep -qxF "$LOCAL_LINE" "$REPO_FILE"; then
-    sed -i.bak "1i\\
-${LOCAL_LINE}
-" "$REPO_FILE" && rm -f "${REPO_FILE}.bak"
-fi
-
-echo "ib/prepare-repo: $(find "$WORKDIR/local_repo" -maxdepth 1 -type f | wc -l | tr -d ' ') 个文件注册到 local_repo ($REPO_STYLE)"
+echo "ib/prepare-repo: $copied 个 ipk/apk → $WORKDIR/packages/ (IB make image 时自动重 index)"
