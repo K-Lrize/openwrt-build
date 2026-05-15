@@ -4,7 +4,8 @@
 # 在「已解压的 ImageBuilder workdir」内把外部 ipk/apk 注册为本地最高优先级源:
 #   1. 把 packages 目录下所有 ipk/apk 复制到 workdir/local_repo/
 #   2. 生成 Packages.gz / APKINDEX.tar.gz (复用 scripts/sdk/index.sh)
-#   3. 在 repositories.conf 第一行注入 src/gz local file://... 确保本地源优先
+#   3. 在 IB 的 repo 配置文件(opkg: repositories.conf / apk: repositories)
+#      第一行注入本地源,确保本地源比远程 feed 优先。
 #
 # 取代旧 _firmware-image.yml:95-108 在 docker IB 容器内跑的那一段。
 #
@@ -41,10 +42,26 @@ done
 WORKDIR="$(cd "$WORKDIR" && pwd)"
 PACKAGES_DIR="$(cd "$PACKAGES_DIR" && pwd)"
 
-if [ ! -f "$WORKDIR/repositories.conf" ]; then
-    echo "::error::ib/prepare-repo: $WORKDIR 不像 IB 根 (缺 repositories.conf)" >&2
+# 自动识别 IB 风格:
+#   opkg 时代: $WORKDIR/repositories.conf,语法 'src/gz <name> <url>'
+#   apk  时代: $WORKDIR/repositories     ,语法 '<url>' 一行一个
+# OpenWrt main 自 2024-12 切到 APK,IB tar 内顶层文件改名为 'repositories'。
+REPO_FILE=""
+REPO_STYLE=""
+if   [ -f "$WORKDIR/repositories.conf" ]; then
+    REPO_FILE="$WORKDIR/repositories.conf"
+    REPO_STYLE="opkg"
+elif [ -f "$WORKDIR/repositories" ]; then
+    REPO_FILE="$WORKDIR/repositories"
+    REPO_STYLE="apk"
+else
+    echo "::error::ib/prepare-repo: $WORKDIR 不像 IB 根 (既无 repositories.conf 也无 repositories)" >&2
+    echo "::group::ib-root listing"
+    ls -la "$WORKDIR" >&2 || true
+    echo "::endgroup::"
     exit 1
 fi
+echo "ib/prepare-repo: 检测到 $REPO_STYLE 风格 IB ($REPO_FILE)"
 
 mkdir -p "$WORKDIR/local_repo"
 
@@ -63,12 +80,16 @@ fi
 # 生成索引 (借 IB 自带的 ipkg-make-index.sh,IB tar 通常包含它)
 bash "$SCRIPT_DIR/../sdk/index.sh" --pool-dir "$WORKDIR/local_repo" --sdk-dir "$WORKDIR"
 
-# 注入到 repositories.conf 第一行 — local 必须比远程 feed 优先
-LOCAL_LINE="src/gz local file://$WORKDIR/local_repo"
-if ! grep -qxF "$LOCAL_LINE" "$WORKDIR/repositories.conf"; then
+# 注入到 repo 文件第一行 — local 必须比远程 feed 优先
+case "$REPO_STYLE" in
+    # opkg 接受 file:// URL;apk-tools 只认裸文件系统路径或 http(s):// URL。
+    opkg) LOCAL_LINE="src/gz local file://$WORKDIR/local_repo" ;;
+    apk)  LOCAL_LINE="$WORKDIR/local_repo" ;;
+esac
+if ! grep -qxF "$LOCAL_LINE" "$REPO_FILE"; then
     sed -i.bak "1i\\
 ${LOCAL_LINE}
-" "$WORKDIR/repositories.conf" && rm -f "$WORKDIR/repositories.conf.bak"
+" "$REPO_FILE" && rm -f "${REPO_FILE}.bak"
 fi
 
-echo "ib/prepare-repo: $(find "$WORKDIR/local_repo" -maxdepth 1 -type f | wc -l | tr -d ' ') 个文件注册到 local_repo"
+echo "ib/prepare-repo: $(find "$WORKDIR/local_repo" -maxdepth 1 -type f | wc -l | tr -d ' ') 个文件注册到 local_repo ($REPO_STYLE)"

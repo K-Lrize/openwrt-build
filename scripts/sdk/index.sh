@@ -42,11 +42,9 @@ done
 POOL_DIR="$(cd "$POOL_DIR" && pwd)"
 SDK_DIR="$(cd "$SDK_DIR" && pwd)"
 
+# ipkg-make-index.sh 只在 SDK tar 内,IB tar 没有 — 因此这里做软检查,
+# 真正用到(目录里有 ipk)时再硬失败,避免纯 apk 场景把 IB 也卡在前置检查。
 IPKG_INDEX="$SDK_DIR/scripts/ipkg-make-index.sh"
-if [ ! -x "$IPKG_INDEX" ]; then
-    echo "::error::sdk/index: 未找到 $IPKG_INDEX (SDK 缺少 ipkg-make-index.sh)" >&2
-    exit 1
-fi
 
 # SDK 的 host 工具链放在 staging_dir/host/bin,放 PATH 顶部以便 apk / gzip 等工具可用
 if [ -d "$SDK_DIR/staging_dir/host/bin" ]; then
@@ -60,6 +58,10 @@ while IFS= read -r dir; do
     echo "::group::sdk/index: $dir"
 
     if compgen -G "$dir/*.ipk" >/dev/null; then
+        if [ ! -x "$IPKG_INDEX" ]; then
+            echo "::error::sdk/index: 目录 $dir 含 ipk 但 $SDK_DIR 缺 scripts/ipkg-make-index.sh — 传入的 --sdk-dir 必须是 SDK 根,不能是 IB 根。" >&2
+            exit 1
+        fi
         "$IPKG_INDEX" "$dir" > "$dir/Packages"
         gzip -9nc "$dir/Packages" > "$dir/Packages.gz"
         echo "  ipk: $(find "$dir" -maxdepth 1 -name '*.ipk' | wc -l | tr -d ' ') 个 → Packages.gz"
