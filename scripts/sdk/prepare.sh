@@ -58,6 +58,17 @@ WORKDIR="$(cd "$WORKDIR" && pwd)"
 CONF_DIR="$(cd "$CONF_DIR" && pwd)"
 [ -n "$FEED_OVERLAY" ] && FEED_OVERLAY="$(cd "$FEED_OVERLAY" && pwd)"
 
+# PACKAGES_FILE 必须在 cd $WORKDIR 之前规范化为绝对路径,否则相对路径(如 chunk.txt
+# 由调用方写在 $GITHUB_WORKSPACE)在 cd 后会找不到,使下文 [ -f ] 检测失败,静默
+# 落入 'feeds install -a' 分支 — 即 ee73a8c 修过的"全量展开"故障复现。
+if [ -n "$PACKAGES_FILE" ]; then
+    if [ ! -f "$PACKAGES_FILE" ]; then
+        echo "::error::sdk/prepare: --packages 文件不存在: $PACKAGES_FILE" >&2
+        exit 1
+    fi
+    PACKAGES_FILE="$(cd "$(dirname "$PACKAGES_FILE")" && pwd)/$(basename "$PACKAGES_FILE")"
+fi
+
 cd "$WORKDIR"
 
 if [ ! -x ./scripts/feeds ]; then
@@ -126,9 +137,11 @@ echo "::group::feeds update -a"
 echo "::endgroup::"
 
 echo "::group::feeds install"
-if [ -n "$PACKAGES_FILE" ] && [ -f "$PACKAGES_FILE" ]; then
-    echo "按包清单精准 install (避免 base-packages 全量 default=m 展开)"
-    # xargs 兼容空文件
+if [ -n "$PACKAGES_FILE" ]; then
+    # 调用方明确给了清单 → 必须按清单 install。绝不退化到 -a,
+    # 否则 base-packages/ 全量包通过 default=m 被 defconfig 展开
+    # (ee73a8c 修过的同款故障)。
+    echo "按包清单精准 install: $PACKAGES_FILE"
     if [ -s "$PACKAGES_FILE" ]; then
         xargs ./scripts/feeds install < "$PACKAGES_FILE"
     else
