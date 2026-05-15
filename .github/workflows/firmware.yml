@@ -51,7 +51,7 @@ jobs:
         run: bash scripts/ci/calculate-matrix.sh
 
   Analyze-Diff:
-    name: Analyze packages
+    name: Probe missing via IB dry-run
     needs: Initialize
     if: needs.Initialize.outputs.has_builds == 'true'
     runs-on: ubuntu-24.04
@@ -65,46 +65,87 @@ jobs:
         with:
           path: build-config
 
-      - name: Download manifest sidecars
+      - name: Install host deps (for IB make manifest)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates file gawk gettext git jq libncurses-dev \
+            perl python3 rsync signify-openbsd unzip wget xz-utils zlib1g zstd
+
+      - name: Download IB tarball
         shell: bash
         env:
-          GH_TOKEN:            ${{ secrets.GITHUB_TOKEN }}
-          IB_MANIFEST_NAME:    ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_manifest_name }}
-          POOL_MANIFEST_NAME:  ${{ needs.Initialize.outputs.pool_manifest_name }}
+          GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+          IB_TAR_NAME:  ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].ib_tar_name }}
+          RELEASE_TAG:  ${{ env.BASE_RELEASE_TAG }}
         run: |
           set -e
-          # Tier1: IB sidecar manifest (强依赖,缺则 fail)
-          gh release download "$BASE_RELEASE_TAG" \
+          gh release download "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern "$IB_MANIFEST_NAME" \
-            --output ib.manifest.txt
+            --pattern "$IB_TAR_NAME" \
+            --output "$IB_TAR_NAME"
+          mkdir -p ib-work
+          tar --use-compress-program=unzstd -xf "$IB_TAR_NAME" \
+              -C ib-work --strip-components=1
 
-          # Tier2: Pool sidecar manifest (软依赖,首次构建可能还没 pool)
-          if ! gh release download "$POOL_RELEASE_TAG" \
+      - name: Download pool tarball (Tier2)
+        shell: bash
+        env:
+          GH_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
+          POOL_TAR_NAME:   ${{ fromJSON(needs.Initialize.outputs.device_meta)[matrix.device].pool_tar_name }}
+          RELEASE_TAG:     ${{ env.POOL_RELEASE_TAG }}
+        run: |
+          set -e
+          mkdir -p tier2-packages
+          if ! gh release download "$RELEASE_TAG" \
                  --repo "$GITHUB_REPOSITORY" \
-                 --pattern "$POOL_MANIFEST_NAME" \
-                 --output pool.manifest.txt 2>/dev/null; then
-            echo "::warning::Pool manifest ${POOL_MANIFEST_NAME} 未发布,Tier2 清单按空处理。"
-            : > pool.manifest.txt
+                 --pattern "$POOL_TAR_NAME" \
+                 --output "$POOL_TAR_NAME" 2>/dev/null; then
+            echo "::warning::Pool tar ${POOL_TAR_NAME} 未发布,probe 仅基于 IB 自带 packages。"
+          else
+            tar --use-compress-program=unzstd -xf "$POOL_TAR_NAME" -C tier2-packages
           fi
 
-      - name: Find missing packages
-        id: diff
+      - name: Register Tier2 into IB packages/
+        shell: bash
+        run: |
+          # 让 probe 阶段看到的 available 集合 = IB 自带 + pool,
+          # 否则 pool 已编的包都会被算成 missing,Tier3 重复编。
+          bash build-config/scripts/ib/prepare-repo.sh \
+            --workdir ib-work \
+            --packages-dir tier2-packages
+
+      - name: Probe missing via make manifest
         shell: bash
         env:
           DEVICE: ${{ matrix.device }}
         run: |
-          bash build-config/scripts/firmware/analyze-diff.sh \
-            --config "build-config/devices/${DEVICE}/.config" \
-            --ib-manifest ib.manifest.txt \
-            --pool-manifest pool.manifest.txt \
-            --output "${DEVICE}.json"
+          bash build-config/scripts/firmware/probe-missing.sh \
+            --workdir ib-work \
+            --device-config "build-config/devices/${DEVICE}/.config" \
+            --output "${DEVICE}.json" \
+            --conflicts "${DEVICE}.conflicts.txt"
+
+      - name: Surface conflicts as warnings
+        if: always()
+        shell: bash
+        env:
+          DEVICE: ${{ matrix.device }}
+        run: |
+          if [ -s "${DEVICE}.conflicts.txt" ]; then
+            while IFS= read -r pkg; do
+              echo "::warning::${DEVICE}: '$pkg' 触发 conflict — 应在 devices/${DEVICE}/.config 用 '# CONFIG_PACKAGE_${pkg} is not set' 排除"
+            done < "${DEVICE}.conflicts.txt"
+          fi
 
       - name: Upload package diff
         uses: actions/upload-artifact@v7
         with:
           name: missing-info-${{ matrix.device }}
-          path: ${{ matrix.device }}.json
+          path: |
+            ${{ matrix.device }}.json
+            ${{ matrix.device }}.conflicts.txt
+          if-no-files-found: warn
 
   Aggregate-Patches:
     name: Merge package diffs
