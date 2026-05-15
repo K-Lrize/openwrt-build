@@ -154,7 +154,7 @@ jobs:
         run: |
           if ! make package/compile -j$(nproc) -k; then
             echo "::warning::Package compile failed; retrying single-threaded."
-            make package/compile -j1 V=s
+            make package/compile -j1 V=s -k
           fi
 
       - name: Install packages
