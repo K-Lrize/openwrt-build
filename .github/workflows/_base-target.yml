@@ -100,6 +100,19 @@ jobs:
           CONFIG_IB_STANDALONE=y
           EOF
 
+          # 合并所有属于本 target 的 device 选中行,让 buildroot 看到 device 被
+          # 选中后,自动 select 它在 target/linux/<board>/image/<sub>.mk 里
+          # 声明的 DEVICE_PACKAGES (如 mt7990-firmware / kmod-hwmon-pwmfan)。
+          # 这样 IB tar 内就有这些 device-specific 包,IB build 不再报缺。
+          device_re="^CONFIG_TARGET_${target_main}_${target_sub}_DEVICE_.+=y\$"
+          for cfg in build-config/devices/*/.config; do
+              [ -f "$cfg" ] || continue
+              if grep -qE "$device_re" "$cfg"; then
+                  echo "Merging device select from: $cfg"
+                  grep -E "$device_re" "$cfg" >> .config
+              fi
+          done
+
           if [ -f build-config/common/base-config ]; then
             echo "Adding common/base-config..."
             cat build-config/common/base-config >> .config

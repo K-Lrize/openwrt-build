@@ -92,8 +92,9 @@ REQUESTED="$OUT/.reports/requested.txt"
 MISSING="$OUT/.reports/missing-after-defconfig.txt"
 FAILED="$OUT/.reports/failed.txt"
 
-# 1. 清洗清单 (二次保险,kmod 由调用方上层处理为 error/warn,这里 strip 即可)
-pkg_filter_clean strip < "$PKG_FILE" > "$REQUESTED"
+# 1. 清洗清单。SDK 实际能编 kmod (Module.symvers + 预编 *.ko 在 SDK tar 内),
+# 用 'keep' 保留 kmod 条目;调用方上层若想守门可用 error/warn。
+pkg_filter_clean keep < "$PKG_FILE" > "$REQUESTED"
 
 if [ ! -s "$REQUESTED" ]; then
     echo "::warning::sdk/compile: 清洗后清单为空,跳过编译。"

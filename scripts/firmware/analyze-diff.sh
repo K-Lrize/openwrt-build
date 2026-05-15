@@ -90,9 +90,9 @@ strip_manifest() {
 }
 
 # 1. Tier1 + Tier2 已有清单 (剥版本 → 清洗 → 去重)
-strip_manifest "$IB_MANIFEST" | pkg_filter_clean strip | sort -u > "$tmp/available.txt"
+strip_manifest "$IB_MANIFEST" | pkg_filter_clean keep | sort -u > "$tmp/available.txt"
 if [ -n "$POOL_MANIFEST" ] && [ -f "$POOL_MANIFEST" ]; then
-    strip_manifest "$POOL_MANIFEST" | pkg_filter_clean strip | sort -u > "$tmp/pool.txt"
+    strip_manifest "$POOL_MANIFEST" | pkg_filter_clean keep | sort -u > "$tmp/pool.txt"
     sort -u -o "$tmp/available.txt" "$tmp/available.txt" "$tmp/pool.txt"
 fi
 
@@ -104,12 +104,12 @@ grep -E '^CONFIG_PACKAGE_.+=[ym]' "$CONFIG_FILE" \
 # 3. Required - Available
 comm -23 "$tmp/required.txt" "$tmp/available.txt" > "$tmp/missing_raw.txt"
 
-# 4. 过滤 kmod-* (SDK 容器无法补编)
-pkg_filter_clean strip < "$tmp/missing_raw.txt" > "$tmp/missing.txt"
+# 4. 保留 kmod-* — SDK 能补编 kmod (Module.symvers 在 SDK tar 内)。
+pkg_filter_clean keep < "$tmp/missing_raw.txt" > "$tmp/missing.txt"
 
 missing_n="$(wc -l < "$tmp/missing.txt" | tr -d ' ')"
-skipped_kmod="$(grep -c '^kmod-' "$tmp/missing_raw.txt" || true)"
-echo "firmware/analyze-diff: ${missing_n} 用户态包需补编;跳过 kmod ${skipped_kmod} 个 (应在 base-config 处理)。"
+kmod_n="$(grep -c '^kmod-' "$tmp/missing.txt" || true)"
+echo "firmware/analyze-diff: ${missing_n} 包需补编 (其中 kmod ${kmod_n} 个,SDK 会尝试编)。"
 
 # 5. 产出 JSON 数组
 if [ "$missing_n" -gt 0 ]; then

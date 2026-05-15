@@ -22,13 +22,24 @@
 #   pkgs=$(extract_packages devices/mt3600be/.config)
 #   target=$(extract_target devices/mt3600be/.config)
 
-# 输出所有 CONFIG_PACKAGE_*=y/=m 启用的官方包名（每行一个，不含 CONFIG_PACKAGE_ 前缀）。
-# 适用：种子格式 + defconfig 后格式（两者都有 CONFIG_PACKAGE_*=y/m 行）。
+# 输出 device .config 中包的"愿望表"，喂给 IB `make image PACKAGES=...`：
+#   CONFIG_PACKAGE_xxx=y/=m         → 输出 'xxx'         (装)
+#   # CONFIG_PACKAGE_xxx is not set → 输出 '-xxx'        (从 IB 的 DEFAULT_PACKAGES /
+#                                                         PROFILE_PACKAGES 里负号排除)
+#
+# 为什么 'is not set' 也要输出：IB 装哪些包只看上游 makefile 的 DEFAULT_PACKAGES +
+# DEVICE_PACKAGES + 命令行 PACKAGES，根本不读 .config 的 =y/=m。所以 device .config
+# 里 'is not set' 在 IB 阶段必须翻译成 '-xxx' 负号语法 (IB Makefile L143-147 的
+# filter-out -% 处理) 才能真正禁掉默认包；否则会撞上 wpad-basic-mbedtls 这类
+# DEFAULT_PACKAGES 默认包与你显式选的 wpad-openssl 冲突的问题。
 extract_packages() {
     local config="$1"
     [ -f "$config" ] || return 0
-    grep -E '^CONFIG_PACKAGE_.*=[ym]$' "$config" \
-        | sed -E 's/^CONFIG_PACKAGE_(.*)=[ym]$/\1/' \
+    grep -E '^CONFIG_PACKAGE_.+=[ym]$' "$config" \
+        | sed -E 's/^CONFIG_PACKAGE_(.+)=[ym]$/\1/' \
+        || true
+    grep -E '^# CONFIG_PACKAGE_[A-Za-z0-9._+-]+ is not set$' "$config" \
+        | sed -E 's/^# CONFIG_PACKAGE_([A-Za-z0-9._+-]+) is not set$/-\1/' \
         || true
 }
 
