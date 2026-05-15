@@ -96,6 +96,7 @@ jobs:
           CONFIG_TARGET_${target_main}_${target_sub}=y
           CONFIG_DEVEL=y
           CONFIG_ALL_KMODS=y
+          CONFIG_ALL_NONSHARED=y
           CONFIG_SDK=y
           CONFIG_IB=y
           CONFIG_IB_STANDALONE=y
