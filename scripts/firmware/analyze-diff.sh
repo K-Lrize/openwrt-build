@@ -56,10 +56,43 @@ mkdir -p "$(dirname "$OUTPUT")"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-# 1. Tier1 + Tier2 已有清单 (清洗 + 去重)
-pkg_filter_clean strip < "$IB_MANIFEST" | sort -u > "$tmp/available.txt"
+# manifest 行剥成裸包名。
+# 上游(_base-target.yml / _pool-finalize.yml)从 ipk/apk 文件名生成 manifest,
+# 但对 apk(Alpine 风格 <pkg>-<ver>[-r<rel>])的剥离规则不存在通用解 —— 这里
+# 按扩展名约定的两种命名分别处理。manifest 现在保留版本信息,剥离在此完成。
+#
+#   ipk: <pkg>_<ver>_<arch...>          ←  _<ver>_<arch...> 用下划线分段
+#   apk: <pkg>-<ver>[-r<rel>]           ←  -<数字开头版本段> 可选 -r<n>
+#
+# 已知误伤:形如 kmod-nls-iso8859-1 这种"包名段以 -<整数> 结尾"的会被错剥成
+# kmod-nls-iso8859,但 pkg_filter_clean strip 后续会丢掉所有 kmod-*,不影响。
+strip_manifest() {
+    awk '
+        /\.ipk$/ {
+            sub(/\.ipk$/, "")
+            sub(/_[0-9][^_]*_[a-z0-9_-]+$/, "")
+            print; next
+        }
+        /\.apk$/ {
+            sub(/\.apk$/, "")
+            sub(/-r[0-9]+$/, "")
+            sub(/-[0-9][^-]*([.~][^-]*)*$/, "")
+            print; next
+        }
+        # 兼容上游未来直接产出裸包名 / 已剥后缀的形态:
+        # 仍按 apk 风格做一次保守剥离。
+        {
+            sub(/-r[0-9]+$/, "")
+            sub(/-[0-9][^-]*([.~][^-]*)*$/, "")
+            print
+        }
+    ' "$1"
+}
+
+# 1. Tier1 + Tier2 已有清单 (剥版本 → 清洗 → 去重)
+strip_manifest "$IB_MANIFEST" | pkg_filter_clean strip | sort -u > "$tmp/available.txt"
 if [ -n "$POOL_MANIFEST" ] && [ -f "$POOL_MANIFEST" ]; then
-    pkg_filter_clean strip < "$POOL_MANIFEST" | sort -u > "$tmp/pool.txt"
+    strip_manifest "$POOL_MANIFEST" | pkg_filter_clean strip | sort -u > "$tmp/pool.txt"
     sort -u -o "$tmp/available.txt" "$tmp/available.txt" "$tmp/pool.txt"
 fi
 
