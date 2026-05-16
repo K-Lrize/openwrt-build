@@ -80,39 +80,73 @@ fi
 # 所以必须在这里主动生成,否则 STANDALONE 模式下 apk 看到空仓 → 全部包 missing。
 # 即便没注入新包,IB 自带的 1000+ 个 .apk 也需要索引才能被 probe / make image 查到。
 #
-# 注意:上游 IB Makefile 的 package_index target 使用了 `>/dev/null 2>/dev/null || true`,
-# 会静默掩盖 apk mkndx 的失败。我们在这里绕过 make 直接调 apk 以暴露真错误。
+# apk mkndx 是 all-or-nothing: 任何一个 .apk 让 mkndx 报 `file format is invalid`,
+# 整个 packages.adb 都不创建 (而非"少几条记录")。上游 IB Makefile 的 package_index
+# 用 `>/dev/null 2>/dev/null || true` 把这种致命失败伪装成无声成功 — 后续 apk add
+# 就拿空仓装包。我们这里:
+#   1) 直接调 apk 不藏 stderr
+#   2) 失败时解析 stderr 提取 invalid 文件,隔离到 packages/.broken/
+#   3) 隔离后重跑 mkndx — 这时 packages.adb 必生成
+#   4) 把被隔离的包暴露成 GHA warning,probe-missing 会自然把它们报为 missing
+#      → Compile-Fallback 走 SDK 补编兜底
 echo "ib/prepare-repo: 重建 package index..."
 
-# 1. 查找 apk 二进制。通常在 staging_dir/host/bin/apk
 APK_BIN="$WORKDIR/staging_dir/host/bin/apk"
 if [ ! -x "$APK_BIN" ]; then
-    # 兼容搜索 (部分环境路径可能不同)
     APK_BIN=$(find "$WORKDIR" -name apk -type f -perm -111 2>/dev/null | head -n 1) || true
 fi
+[ -x "$APK_BIN" ] || {
+    echo "::error::ib/prepare-repo: 找不到 apk 可执行 (期望在 staging_dir/host/bin/apk)" >&2
+    exit 1
+}
 
-if [ -x "$APK_BIN" ]; then
-    echo "ib/prepare-repo: 使用 $APK_BIN 绕过 Makefile 直接执行 mkndx..."
-    # mkndx 需要在 packages 目录下执行,索引当前目录下所有 *.apk
-    # --allow-untrusted 是因为 IB 自带包通常没签名或签名在 STANDALONE 下不好校验
-    if ! ( cd "$WORKDIR/packages" && "$APK_BIN" mkndx --allow-untrusted --output packages.adb *.apk ); then
-        echo "::error::ib/prepare-repo: apk mkndx 失败" >&2
+mkndx_log="$(mktemp)"
+trap 'rm -f "$mkndx_log"' EXIT
+
+run_mkndx() {
+    ( cd "$WORKDIR/packages" && "$APK_BIN" mkndx --allow-untrusted --output packages.adb *.apk ) \
+        >"$mkndx_log" 2>&1
+}
+
+if ! run_mkndx; then
+    echo "::group::mkndx 第一次失败,完整输出"
+    cat "$mkndx_log" >&2
+    echo "::endgroup::"
+
+    # 解析格式: `ERROR: <basename>.apk: file format is invalid or inconsistent`
+    invalid=$(awk -F': ' '/^ERROR:.*\.apk: file format/ { print $2 }' "$mkndx_log" | sort -u)
+
+    if [ -z "$invalid" ]; then
+        echo "::error::ib/prepare-repo: mkndx 失败但无法从 stderr 解析 invalid 包名,见上方日志" >&2
         exit 1
     fi
-else
-    echo "ib/prepare-repo: 未找到可执行的 apk 二进制,退回到 make package_index (注意:错误可能被掩盖)..."
-    if ! ( cd "$WORKDIR" && make package_index >/tmp/ib-prepare-repo-index.log 2>&1 ); then
-        echo "::error::ib/prepare-repo: make package_index 失败" >&2
-        echo "::group::package_index log (tail 80)"
-        tail -80 /tmp/ib-prepare-repo-index.log >&2 || true
+
+    n_invalid=$(printf '%s\n' "$invalid" | wc -l | tr -d ' ')
+    echo "::warning::ib/prepare-repo: 上游 IB tar 含 $n_invalid 个无法被 apk mkndx 索引的 .apk,已隔离到 packages/.broken/"
+    mkdir -p "$WORKDIR/packages/.broken"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        echo "::warning::ib/prepare-repo:   - $f (probe-missing 将报为 missing → fallback 重编)"
+        mv "$WORKDIR/packages/$f" "$WORKDIR/packages/.broken/" || {
+            echo "::error::ib/prepare-repo: 无法隔离 $f" >&2
+            exit 1
+        }
+    done <<<"$invalid"
+
+    echo "ib/prepare-repo: 隔离完成,重新执行 mkndx..."
+    if ! run_mkndx; then
+        echo "::group::mkndx 第二次失败,完整输出"
+        cat "$mkndx_log" >&2
         echo "::endgroup::"
+        echo "::error::ib/prepare-repo: 隔离 $n_invalid 个 invalid .apk 后 mkndx 仍失败 — 见上方日志" >&2
         exit 1
     fi
 fi
 
 if [ ! -f "$WORKDIR/packages/packages.adb" ]; then
-    echo "::error::ib/prepare-repo: 索引重建后仍无 packages.adb,IB STANDALONE 将查不到任何包" >&2
+    echo "::error::ib/prepare-repo: mkndx 报成功但 packages.adb 未生成 (apk-tools 行为异常)" >&2
     exit 1
 fi
 
-echo "ib/prepare-repo: $copied 个 ipk/apk → $WORKDIR/packages/, packages.adb 已重建"
+n_indexed=$(find "$WORKDIR/packages" -maxdepth 1 -type f -name '*.apk' | wc -l | tr -d ' ')
+echo "ib/prepare-repo: 注入 $copied 个外部 ipk/apk,packages.adb 已索引 $n_indexed 个 .apk"

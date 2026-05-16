@@ -1,5 +1,6 @@
 # macOS
 .DS_Store
+temp
 
 # scripts/build/ 存放构建期 shell 辅助脚本，不是构建产物目录——
 # 取消对它的忽略 (全局 ~/.gitignore_global 里有通用的 `build/` 规则会误伤)。
