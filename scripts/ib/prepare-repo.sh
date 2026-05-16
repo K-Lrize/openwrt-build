@@ -179,5 +179,32 @@ if [ ! -f "$WORKDIR/packages/packages.adb" ]; then
     exit 1
 fi
 
-n_indexed=$(find "$WORKDIR/packages" -maxdepth 1 -type f -name '*.apk' | wc -l | tr -d ' ')
-echo "ib/prepare-repo: 注入 $copied 个外部 ipk/apk,packages.adb 已索引 $n_indexed 个 .apk"
+adb_size=$(stat -c %s "$WORKDIR/packages/packages.adb" 2>/dev/null || stat -f %z "$WORKDIR/packages/packages.adb")
+n_files=$(find "$WORKDIR/packages" -maxdepth 1 -type f -name '*.apk' | wc -l | tr -d ' ')
+
+# Sanity check: packages.adb 必须能查到 IB 必带核心包。否则即便文件存在,
+# probe-missing / make image 也会全报 "no such package"。
+# 用 apk search 而非 apk info -L (后者要 --root 初始化数据库,更重)。
+echo "ib/prepare-repo: 索引验证 (查询 base-files / libc / kernel)..."
+verify_log="$(mktemp)"
+if ! "$APK_BIN" --repository "$WORKDIR/packages/packages.adb" --allow-untrusted \
+        search 'base-files' 'libc' 'kernel' >"$verify_log" 2>&1 \
+     || ! grep -q '^base-files' "$verify_log"; then
+    echo "::error::ib/prepare-repo: packages.adb 存在 ($adb_size 字节) 但 apk 查不到 base-files —— 索引损坏或为空"
+    echo "::group::packages.adb 信息"
+    ls -la "$WORKDIR/packages/packages.adb" >&2
+    echo "--- apk search 结果 (前 20 行):"
+    head -20 "$verify_log" >&2
+    echo "--- apk list 结果 (前 20 行):"
+    "$APK_BIN" --repository "$WORKDIR/packages/packages.adb" --allow-untrusted list 2>&1 | head -20 >&2 || true
+    echo "--- packages/ 目录 *.apk 数量:"
+    echo "$n_files" >&2
+    echo "--- packages/.broken/ 隔离了哪些:"
+    ls "$WORKDIR/packages/.broken/" 2>&1 | head -20 >&2 || true
+    echo "::endgroup::"
+    rm -f "$verify_log"
+    exit 1
+fi
+rm -f "$verify_log"
+
+echo "ib/prepare-repo: 注入 $copied 个外部 ipk/apk,packages.adb 已索引 $n_files 个 .apk (核心包 base-files 校验通过)"
