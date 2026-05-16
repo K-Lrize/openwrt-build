@@ -17,8 +17,6 @@ permissions:
 env:
   DEFAULT_OPENWRT_REF: main
   DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
-  DEFAULT_STRICT: 'true'
-  DEFAULT_UPDATE_RELEASE: 'true'
 
 on:
   push:
@@ -88,7 +86,9 @@ jobs:
       target_slug:       ${{ matrix.entry.target_slug }}
       source_slug:       ${{ needs.Initialize.outputs.source_slug }}
       base_release_tag:  base-rolling
-      strict:            ${{ inputs.strict != null && inputs.strict || (env.DEFAULT_STRICT == 'true') }}
+      # push 触发时 inputs.strict 为 null → 默认 true
+      # workflow_dispatch 时尊重用户传值 (true/false 都正确)
+      strict:            ${{ inputs.strict == null && true || inputs.strict }}
 
   Finalize-Pool:
     name: Finalize pool
@@ -101,4 +101,4 @@ jobs:
       pool_manifest_name:        ${{ needs.Initialize.outputs.pool_manifest_name }}
       base_release_tag:          base-rolling
       pool_release_tag:          pool-rolling
-      update_release:            ${{ inputs.update_release != null && inputs.update_release || (env.DEFAULT_UPDATE_RELEASE == 'true') }}
+      update_release:            ${{ inputs.update_release == null && true || inputs.update_release }}
