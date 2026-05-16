@@ -1,11 +1,14 @@
-name: "[Reusable] Target Base Builder"
+name: "[Reusable] Base — SDK + IB per target"
 
-# Reusable: build SDK and ImageBuilder per target,产出三件套推到 rolling release:
-#   1. SDK tarball     (内嵌 base-packages/,供 pool/firmware-packages 阶段 sdk/prepare 自动注入 src-link)
-#   2. IB tarball      (供 firmware-image 阶段本地 tar -x 后直接 make image)
-#   3. IB manifest     (历史遗留 — 上游 probe-missing.sh 已用 IB make manifest dry-run
-#                      取代基于 manifest sidecar 的 diff,保留以备 debug 用)
-# 文件名规则集中在 scripts/lib/asset-names.sh。
+# Reusable: 对单个 target (mediatek/filogic 之类) 跑完整 buildroot, 产出推 release 的
+# 三件套:
+#   1. SDK tarball     — 内嵌 base-packages/, 供 pool/firmware-packages 阶段
+#                        sdk/prepare 自动注入 src-link
+#   2. IB tarball      — 供 firmware-image 阶段本地 tar -x 后直接 make image
+#   3. IB manifest     — 已编内置 ipk 的扁平包名清单 (人读用; 自动诊断走
+#                        ib/probe-missing.sh make manifest dry-run)
+#
+# 文件命名集中在 scripts/lib/asset-names.sh。
 
 on:
   workflow_call:
@@ -24,12 +27,11 @@ permissions:
   contents: write
 
 jobs:
-  Build-Base-Infrastructure:
-    name: Build base
+  Build-Base-Per-Target:
+    name: Build SDK + IB (${{ inputs.target }})
     runs-on: ubuntu-24.04
-
     steps:
-      - name: Free disk
+      - name: Free runner disk
         uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: false
@@ -40,7 +42,7 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - name: Install deps
+      - name: Install host build deps
         run: |
           sudo apt-get update -q
           sudo apt-get install -y \
@@ -49,19 +51,19 @@ jobs:
             libssl-dev python3-setuptools rsync unzip zlib1g-dev \
             file wget qemu-utils ccache jq zstd device-tree-compiler python3-pyelftools
 
-      - name: Checkout OpenWrt
+      - name: Checkout OpenWrt source
         uses: actions/checkout@v6
         with:
           repository: ${{ inputs.openwrt_repo }}
           ref: ${{ inputs.openwrt_ref }}
           fetch-depth: 1
 
-      - name: Checkout config
+      - name: Checkout build-config
         uses: actions/checkout@v6
         with:
           path: build-config
 
-      - name: Compute names
+      - name: Compute asset names
         id: slugs
         shell: bash
         env:
@@ -79,31 +81,27 @@ jobs:
             echo "ib_manifest_name=$(ib_manifest_name "$TARGET" "$REPO" "$REF")"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Prepare feeds
+      - name: Prepare feeds (sdk/prepare.sh)
         shell: bash
         run: bash build-config/scripts/sdk/prepare.sh --workdir .
 
-      - name: Configure base
+      - name: Compose buildroot .config
         shell: bash
         run: |
           target_main=$(echo "${{ inputs.target }}" | cut -d'/' -f1)
           target_sub=$(echo "${{ inputs.target }}" | cut -d'/' -f2)
 
+          # .config 拼装顺序: target select → device select → 全局开关 (base-config)
+          # CONFIG_TARGET_* 因为是矩阵动态值, 必须在 workflow 里拼; 其他开关 (DEVEL/
+          # ALL_KMODS/SDK/IB/IB_STANDALONE) 已在 base-config 顶部声明, 这里不重复。
           cat > .config <<EOF
           CONFIG_TARGET_${target_main}=y
           CONFIG_TARGET_${target_main}_${target_sub}=y
-          CONFIG_DEVEL=y
-          CONFIG_ALL_KMODS=y
-          CONFIG_SDK=y
-          CONFIG_IB=y
-          CONFIG_IB_STANDALONE=y
           EOF
 
-          # 合并所有属于本 target 的 device 选中行,让 buildroot 看到 device 被
-          # 选中后,自动 select 它在 target/linux/<board>/image/<sub>.mk 里
-          # 声明的 DEVICE_PACKAGES (如 mt7990-firmware / kmod-hwmon-pwmfan)。
-          # 这样 IB tar 内就有这些 device-specific 包,IB build 不再报缺。
-          # G2 套餐方案后 device select 在 devices/<dev>/target.conf。
+          # 合并所有属于本 target 的 device select 行, 让 buildroot 自动 select
+          # 上游 target/linux/<board>/image/<sub>.mk 里声明的 DEVICE_PACKAGES
+          # (mt7990-firmware / kmod-hwmon-pwmfan 等), IB tar 内即有这些 device 包。
           device_re="^CONFIG_TARGET_${target_main}_${target_sub}_DEVICE_.+=y\$"
           for cfg in build-config/devices/*/target.conf; do
               [ -f "$cfg" ] || continue
@@ -114,20 +112,20 @@ jobs:
           done
 
           if [ -f build-config/common/base-config ]; then
-            echo "Adding common/base-config..."
+            echo "Appending common/base-config (全局开关 + kmod + 兜底库)..."
             cat build-config/common/base-config >> .config
           fi
 
           make defconfig
 
-      - name: Download sources
+      - name: Download sources (make download)
         run: |
           if ! make download -j8; then
             echo "::warning::Download failed; retrying single-threaded."
             make download -j1 V=s
           fi
 
-      - name: Build tools
+      - name: Build host tools
         run: |
           if ! make tools/install -j$(nproc) -k; then
             echo "::warning::Tools build failed; retrying single-threaded."
@@ -148,7 +146,7 @@ jobs:
             make target/linux/compile -j1 V=s
           fi
 
-      - name: Build packages
+      - name: Build all packages
         run: |
           if ! make package/compile -j$(nproc) -k; then
             echo "::warning::Package compile failed; retrying single-threaded."
@@ -162,27 +160,27 @@ jobs:
             make package/install -j1 V=s
           fi
 
-      - name: Install kernel
+      - name: Install kernel modules
         run: |
           if ! make target/linux/install -j$(nproc) -k; then
              make target/linux/install -j1 V=s
           fi
 
-      - name: Build SDK
+      - name: Build SDK tarball
         run: |
           if ! make target/sdk/install -j$(nproc) -k; then
             echo "::warning::SDK build failed; retrying single-threaded."
             make target/sdk/install -j1 V=s
           fi
 
-      - name: Build ImageBuilder
+      - name: Build ImageBuilder tarball
         run: |
           if ! make target/imagebuilder/install -j$(nproc) -k; then
             echo "::warning::ImageBuilder build failed; retrying verbose."
             make target/imagebuilder/install -j1 V=s
           fi
 
-      - name: Stage SDK tar (inject base-packages)
+      - name: Stage SDK tar (inject base-packages/)
         shell: bash
         env:
           SDK_TAR_NAME: ${{ steps.slugs.outputs.sdk_tar_name }}
@@ -202,16 +200,16 @@ jobs:
           # 注入 base 源 — sdk/prepare.sh 检测到 ./base-packages 自动注入 src-link
           mkdir -p "/tmp/sdk-inject/${SDK_DIR}/base-packages"
           cp -ra package/* "/tmp/sdk-inject/${SDK_DIR}/base-packages/"
-          # 软链可能指向主源外部,清理掉确保 SDK 自给自足
+          # 软链可能指向主源外部, 清理掉确保 SDK 自给自足
           find "/tmp/sdk-inject/${SDK_DIR}/base-packages" -type l -delete
 
           tar --use-compress-program='zstd -T0 -3' \
               -cf "release-staging/${SDK_TAR_NAME}" \
               -C /tmp/sdk-inject "${SDK_DIR}"
 
-          echo "SDK tar:   $(du -h release-staging/${SDK_TAR_NAME} | awk '{print $1}')"
+          echo "SDK tar size: $(du -h release-staging/${SDK_TAR_NAME} | awk '{print $1}')"
 
-      - name: Stage IB tar + sidecar manifest
+      - name: Stage IB tar + manifest sidecar
         shell: bash
         env:
           IB_TAR_NAME:      ${{ steps.slugs.outputs.ib_tar_name }}
@@ -229,20 +227,22 @@ jobs:
           fi
           IB_DIR="$(ls /tmp/ib-inspect | head -1)"
 
-          # IB tar 内容不修改,只是改名落地到 release-staging
+          # IB tar 内容不修改, 只是改名落地到 release-staging
           cp "$SRC_TAR" "release-staging/${IB_TAR_NAME}"
 
-          # 生成 sidecar manifest (扫描内置 ipk/apk,取裸包名)
+          # 生成 manifest sidecar — 扫描 IB 自带 packages/ 下的 ipk/apk, 反解出
+          # 裸包名清单。给开发者人读 ("IB tar 里到底有什么"), 自动诊断走
+          # ib/probe-missing.sh make manifest dry-run。
           find "/tmp/ib-inspect/${IB_DIR}/packages/" -type f \( -name "*.ipk" -o -name "*.apk" \) \
             | xargs -n1 basename \
             | sed -E 's/\.(ipk|apk)$//' \
             | sed -E 's/_[0-9][^_]*_[a-z0-9_-]+$//' \
             | sort -u > "release-staging/${IB_MANIFEST_NAME}"
 
-          echo "IB tar:    $(du -h release-staging/${IB_TAR_NAME} | awk '{print $1}')"
+          echo "IB tar size: $(du -h release-staging/${IB_TAR_NAME} | awk '{print $1}')"
           echo "IB manifest: $(wc -l < release-staging/${IB_MANIFEST_NAME} | tr -d ' ') 个包"
 
-      - name: Upload base release-staging
+      - name: Upload base artifact
         uses: actions/upload-artifact@v7
         with:
           name: infrastructure-${{ steps.slugs.outputs.target_slug }}-${{ steps.slugs.outputs.source_slug }}

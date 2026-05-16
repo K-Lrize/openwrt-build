@@ -1,10 +1,21 @@
 # mobile — 4G/5G modem + USB tethering
-# USB 网卡 / 串口 kmod 在 base-config 内 (ALL_KMODS 覆盖),这里只放用户态
+#
+# 用途: 接 USB modem 拨号或手机共享网络的设备
+# 备注: USB 网卡 / 串口 kmod 已在 base-config (ALL_KMODS=y 覆盖), 这里只装用户态
 
+# ModemManager — D-Bus 管理 modem 状态机
 modemmanager
 luci-proto-modemmanager
+
+# 设备模式切换 (modem zerocd → tty + qmi/mbim 模式)
 usb-modeswitch
+
+# QMI / MBIM 用户态 (Qualcomm/通用 modem 控制协议)
 libqmi
 libmbim
+
+# 苹果设备网络共享 (USB tethering iPhone/iPad)
 libimobiledevice
+
+# USB 设备清单 / 诊断
 usbutils

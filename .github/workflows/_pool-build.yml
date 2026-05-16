@@ -1,11 +1,11 @@
-name: "[Reusable] Package Pool Builder"
+name: "[Reusable] Pool — Per-target chunk compile"
 
-# Reusable: per-target Pool 编译,按 chunk 切分并发。SDK 来源走 rolling release
-# tarball (无 docker),消费链路全部 host-native:
-#   gh release download → tar -xf → sdk/prepare → pool/select-chunk → sdk/compile
+# Reusable: per-target Pool 编译, 4-chunk 并发跑 sdk/compile。
+# SDK 来源走 base-rolling release tarball (无 docker), 消费链全部 host-native:
+#   gh release download SDK → tar -xf → sdk/prepare → ci/select-chunk → sdk/compile
 #
-# 调用方 (pool-update.yml) 跟着调 _pool-finalize.yml 把所有 chunk 汇总,
-# 生成 pool-<arch>-<source>.tar.zst 推 release。
+# 调用方 (pool-update.yml) 跟着调 _pool-finalize.yml 把所有 chunk 汇总, 生成
+# pool-<arch>-<source>.tar.zst 推 pool-rolling release。
 
 on:
   workflow_call:
@@ -15,11 +15,11 @@ on:
         type: string
         required: true
       target_slug:
-        description: 'slugify(target),用于 artifact 命名 + 日志可读'
+        description: 'slugify(target), artifact 命名 + 日志可读'
         type: string
         required: true
       source_slug:
-        description: 'source_slug(repo,ref) = repo_slug-ref_slug,用于 artifact 跨 run 区分'
+        description: 'source_slug(repo,ref), 用于 artifact 跨 run 区分'
         type: string
         required: true
       base_release_tag:
@@ -27,7 +27,7 @@ on:
         type: string
         default: 'base-rolling'
       strict:
-        description: 'defconfig 后包名缺失时是否硬失败 (Pool 默认 true)'
+        description: 'defconfig 后包名缺失时硬失败 (Pool 默认 true)'
         type: boolean
         default: true
 
@@ -35,20 +35,20 @@ permissions:
   contents: read
 
 jobs:
-  Build-Global-Pool:
-    name: Build pool ${{ inputs.target_slug }} chunk ${{ matrix.chunk }}
+  Build-Pool-Chunk:
+    name: Compile pool ${{ inputs.target_slug }} chunk ${{ matrix.chunk }}/4
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         chunk: [0, 1, 2, 3]
     steps:
-      - name: Checkout config
+      - name: Checkout build-config
         uses: actions/checkout@v6
         with:
           path: build-config
 
-      - name: Install host deps
+      - name: Install host build deps
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
@@ -56,7 +56,7 @@ jobs:
             libncurses-dev libssl-dev python3 rsync unzip wget xsltproc \
             zlib1g-dev zstd
 
-      - name: Download SDK tarball
+      - name: Download SDK tarball from base-rolling
         shell: bash
         env:
           GH_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
@@ -72,7 +72,7 @@ jobs:
           tar --use-compress-program=unzstd -xf "$SDK_TAR_NAME" \
               -C sdk-work --strip-components=1
 
-      - name: Select pool chunk
+      - name: Select chunk from presets union
         shell: bash
         env:
           CHUNK_ID: ${{ matrix.chunk }}
@@ -83,7 +83,7 @@ jobs:
             --chunk-count 4 \
             --output chunk.txt
 
-      - name: Prepare SDK feeds
+      - name: Prepare SDK feeds (sdk/prepare.sh)
         shell: bash
         run: |
           bash build-config/scripts/sdk/prepare.sh \
@@ -91,7 +91,7 @@ jobs:
             --conf-dir "$GITHUB_WORKSPACE/build-config" \
             --packages chunk.txt
 
-      - name: Compile pool chunk
+      - name: Compile chunk (sdk/compile.sh)
         shell: bash
         env:
           STRICT_FLAG: ${{ inputs.strict && '--strict' || '' }}
@@ -103,7 +103,7 @@ jobs:
             --out pool-out \
             $STRICT_FLAG
 
-      - name: Upload pool chunk
+      - name: Upload chunk artifact
         if: always()
         uses: actions/upload-artifact@v7
         with:

@@ -1,8 +1,9 @@
-name: "[Reusable] Firmware Image Generator"
+name: "[Reusable] Firmware — Assemble image"
 
-# Reusable: assemble one device firmware image. 走 release tarball + host-native:
-#   gh release download IB tar + pool tar → tar -xf → ib/prepare-repo → ib/make-image
-# Tier3 补编的 ipk 通过 artifact 拿到本地,与 pool 解压结果合并喂给 ib/prepare-repo。
+# Reusable: 组装一台设备的固件 image。走 release tarball + host-native:
+#   gh release download IB tar + pool tar → tar -xf →
+#     ib/prepare-repo (合并 Tier2 pool + Tier3 补编 ipk 进 IB packages/) →
+#     ib/make-image (IB make image PROFILE=... PACKAGES=...)
 
 on:
   workflow_call:
@@ -35,29 +36,29 @@ permissions:
 
 jobs:
   Assemble-Firmware:
-    name: Assemble image
+    name: Assemble image (${{ inputs.device }})
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout config
+      - name: Checkout build-config
         uses: actions/checkout@v6
         with:
           path: build-config
 
-      - name: Install host deps
+      - name: Install IB host deps
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
             ca-certificates file gawk gettext git jq libncurses-dev \
             perl python3 rsync signify-openbsd unzip wget xz-utils zlib1g zstd
 
-      - name: Download tier3 packages
+      - name: Download Tier3 ipk artifact
         uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           name: tier3-ipks-${{ inputs.arch }}
           path: tier3-packages/
 
-      - name: Download IB tarball
+      - name: Download IB tar from base-rolling
         shell: bash
         env:
           GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
@@ -73,7 +74,7 @@ jobs:
           tar --use-compress-program=unzstd -xf "$IB_TAR_NAME" \
               -C ib-work --strip-components=1
 
-      - name: Download pool tarball
+      - name: Download pool tar from pool-rolling
         shell: bash
         env:
           GH_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
@@ -91,7 +92,7 @@ jobs:
             tar --use-compress-program=unzstd -xf "$POOL_TAR_NAME" -C tier2-packages
           fi
 
-      - name: Stage unified package directory
+      - name: Merge Tier2 + Tier3 into unified package dir
         shell: bash
         run: |
           set -e
@@ -100,14 +101,14 @@ jobs:
             -exec cp -v {} unified_repo/ \; 2>/dev/null || true
           echo "unified_repo: $(find unified_repo -maxdepth 1 -type f | wc -l | tr -d ' ') 个 ipk/apk"
 
-      - name: Register local feed in IB
+      - name: Inject merged repo into IB (ib/prepare-repo.sh)
         shell: bash
         run: |
           bash build-config/scripts/ib/prepare-repo.sh \
             --workdir ib-work \
             --packages-dir unified_repo
 
-      - name: Build firmware image
+      - name: Build firmware image (ib/make-image.sh)
         shell: bash
         env:
           DEVICE: ${{ inputs.device }}
@@ -127,7 +128,7 @@ jobs:
             --packages "$PACKAGES" \
             --out bin-targets
 
-      - name: Collect outputs
+      - name: Collect firmware outputs + checksums
         shell: bash
         env:
           DEVICE: ${{ inputs.device }}
@@ -141,7 +142,7 @@ jobs:
           bash build-config/scripts/ci/checksums.sh "${output_dir}"
           mv "${output_dir}/sha256sums.txt" "${output_dir}/${DEVICE}-sha256sums.txt"
 
-      - name: Upload firmware
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v7
         with:
           name: firmware-${{ inputs.device }}

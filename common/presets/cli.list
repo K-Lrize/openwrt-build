@@ -1,5 +1,7 @@
-# cli — CLI 增强 + 诊断 + 文件同步
-# 给"有 shell 进路由排查"的设备装,低端 (8MB flash) 设备不用引
+# cli — Shell 增强 + 诊断 + 文件同步
+#
+# 用途: "有 shell 进路由排查"的设备 (开发机 / 调试机)
+# 不引: 低端低 Flash 设备 (8MB / 16MB) — 装不下
 
 # Shell + 编辑器
 zsh
@@ -15,11 +17,11 @@ tcpdump
 socat
 drill
 
-# Git + 大文件同步
+# Git + 文件同步
 git
 git-http
 rsync
 openssh-sftp-server
 
-# 网络性能
+# 网络性能压测
 iperf3

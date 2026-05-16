@@ -1,17 +1,21 @@
-name: "[Build] Incremental Firmware"
+name: "[Build] Firmware — Incremental"
 
-# Incremental firmware build and release.
-
-permissions:
-  contents: write
-  actions: read
-
-env:
-  BASE_RELEASE_TAG: base-rolling
-  POOL_RELEASE_TAG: pool-rolling
-  FIRMWARE_RELEASE_TAG: firmware-rolling
-  DEFAULT_OPENWRT_REF: main
-  DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
+# Firmware 轨入口 — 增量出固件, 不重建 SDK / Pool:
+#   1. Probe-Missing  下载 IB + pool tar, make manifest dry-run 探依赖闭包,
+#                     算出 missing 包名 + conflict 警告
+#   2. Aggregate      把各设备的 missing 按 arch 聚合
+#   3. Build-Patches  per arch 跑 Tier3 SDK 补编 (正常路径=空, ~99% 时间 skip)
+#   4. Assemble-Image per device IB 装 (pool + tier3 + files) 出固件
+#   5. Publish        汇总 firmware-* artifact 推 firmware-rolling
+#
+# 触发:
+#   - push: devices / common/files / common/scripts / scripts/ib / scripts/lib /
+#           scripts/ci/{calculate-matrix,merge-missing-info,checksums}.sh /
+#           firmware.yml / _firmware-*.yml
+#   - workflow_dispatch
+#
+# 产物 (release tag = firmware-rolling):
+#   <device>-*-sysupgrade.bin / *-factory.bin / *-sha256sums.txt / *.manifest
 
 on:
   push:
@@ -37,9 +41,20 @@ on:
         description: 'OpenWrt ref'
         default: 'main'
 
+permissions:
+  contents: write
+  actions: read
+
+env:
+  BASE_RELEASE_TAG: base-rolling
+  POOL_RELEASE_TAG: pool-rolling
+  FIRMWARE_RELEASE_TAG: firmware-rolling
+  DEFAULT_OPENWRT_REF: main
+  DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
+
 jobs:
   Initialize:
-    name: Prepare
+    name: Compute device matrix
     runs-on: ubuntu-24.04
     outputs:
       device_matrix:        ${{ steps.matrix.outputs.device_matrix }}
@@ -47,18 +62,18 @@ jobs:
       has_builds:           ${{ steps.matrix.outputs.has_builds }}
       pool_manifest_name:   ${{ steps.matrix.outputs.pool_manifest_name }}
     steps:
-      - name: Checkout
+      - name: Checkout build-config
         uses: actions/checkout@v6
 
-      - name: Build matrix
+      - name: Compute matrix + per-device asset names
         id: matrix
         env:
           OPENWRT_REPO: ${{ inputs.openwrt_repo || env.DEFAULT_OPENWRT_REPO }}
           OPENWRT_REF:  ${{ inputs.openwrt_ref || env.DEFAULT_OPENWRT_REF }}
         run: bash scripts/ci/calculate-matrix.sh
 
-  Analyze-Diff:
-    name: Probe missing via IB dry-run
+  Probe-Missing:
+    name: Probe missing packages (IB dry-run)
     needs: Initialize
     if: needs.Initialize.outputs.has_builds == 'true'
     runs-on: ubuntu-24.04
@@ -67,19 +82,19 @@ jobs:
       matrix:
         device: ${{ fromJSON(needs.Initialize.outputs.device_matrix) }}
     steps:
-      - name: Checkout config
+      - name: Checkout build-config
         uses: actions/checkout@v6
         with:
           path: build-config
 
-      - name: Install host deps (for IB make manifest)
+      - name: Install IB host deps
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
             ca-certificates file gawk gettext git jq libncurses-dev \
             perl python3 rsync signify-openbsd unzip wget xz-utils zlib1g zstd
 
-      - name: Download IB tarball
+      - name: Download IB tar from base-rolling
         shell: bash
         env:
           GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
@@ -95,7 +110,7 @@ jobs:
           tar --use-compress-program=unzstd -xf "$IB_TAR_NAME" \
               -C ib-work --strip-components=1
 
-      - name: Download pool tarball (Tier2)
+      - name: Download pool tar from pool-rolling (Tier2)
         shell: bash
         env:
           GH_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
@@ -108,21 +123,21 @@ jobs:
                  --repo "$GITHUB_REPOSITORY" \
                  --pattern "$POOL_TAR_NAME" \
                  --output "$POOL_TAR_NAME" 2>/dev/null; then
-            echo "::warning::Pool tar ${POOL_TAR_NAME} 未发布,probe 仅基于 IB 自带 packages。"
+            echo "::warning::Pool tar ${POOL_TAR_NAME} 未发布, probe 仅基于 IB 自带 packages。"
           else
             tar --use-compress-program=unzstd -xf "$POOL_TAR_NAME" -C tier2-packages
           fi
 
-      - name: Register Tier2 into IB packages/
+      - name: Inject Tier2 into IB packages/ (ib/prepare-repo.sh)
         shell: bash
         run: |
-          # 让 probe 阶段看到的 available 集合 = IB 自带 + pool,
-          # 否则 pool 已编的包都会被算成 missing,Tier3 重复编。
+          # probe 阶段 "已可用" 集合 = IB 自带 + pool。
+          # 不注入的话 pool 已编的包会被算成 missing, Tier3 重复编。
           bash build-config/scripts/ib/prepare-repo.sh \
             --workdir ib-work \
             --packages-dir tier2-packages
 
-      - name: Probe missing via make manifest
+      - name: Probe via make manifest (ib/probe-missing.sh)
         shell: bash
         env:
           DEVICE: ${{ matrix.device }}
@@ -134,7 +149,7 @@ jobs:
             --output "${DEVICE}.json" \
             --conflicts "${DEVICE}.conflicts.txt"
 
-      - name: Surface conflicts as warnings
+      - name: Surface conflicts as GHA warnings
         if: always()
         shell: bash
         env:
@@ -146,7 +161,7 @@ jobs:
             done < "${DEVICE}.conflicts.txt"
           fi
 
-      - name: Upload package diff
+      - name: Upload missing-info artifact
         uses: actions/upload-artifact@v7
         with:
           name: missing-info-${{ matrix.device }}
@@ -155,24 +170,24 @@ jobs:
             ${{ matrix.device }}.conflicts.txt
           if-no-files-found: warn
 
-  Aggregate-Patches:
-    name: Merge package diffs
-    needs: [Initialize, Analyze-Diff]
+  Aggregate-Missing:
+    name: Aggregate missing-info by arch
+    needs: [Initialize, Probe-Missing]
     runs-on: ubuntu-24.04
     outputs:
       arch_packages_matrix: ${{ steps.merge.outputs.matrix }}
     steps:
-      - name: Checkout config
+      - name: Checkout build-config
         uses: actions/checkout@v6
 
-      - name: Download package diffs
+      - name: Download all missing-info artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: missing-info-*
           path: all-missing/
           merge-multiple: true
 
-      - name: Merge by arch
+      - name: Merge by arch (ci/merge-missing-info.sh)
         id: merge
         shell: bash
         run: |
@@ -180,14 +195,14 @@ jobs:
             all-missing \
             '${{ needs.Initialize.outputs.device_meta }}'
 
-  Compile-Patches:
-    name: Compile packages
-    needs: [Initialize, Aggregate-Patches]
-    if: needs.Aggregate-Patches.outputs.arch_packages_matrix != '[]'
+  Compile-Tier3:
+    name: Tier3 SDK fallback compile (per arch)
+    needs: [Initialize, Aggregate-Missing]
+    if: needs.Aggregate-Missing.outputs.arch_packages_matrix != '[]'
     strategy:
       fail-fast: false
       matrix:
-        arch_data: ${{ fromJSON(needs.Aggregate-Patches.outputs.arch_packages_matrix) }}
+        arch_data: ${{ fromJSON(needs.Aggregate-Missing.outputs.arch_packages_matrix) }}
     uses: ./.github/workflows/_firmware-packages.yml
     with:
       arch:              ${{ matrix.arch_data.key }}
@@ -196,8 +211,8 @@ jobs:
       base_release_tag:  base-rolling
 
   Assemble-Firmware:
-    name: Assemble firmware
-    needs: [Initialize, Compile-Patches]
+    name: Assemble firmware image (per device)
+    needs: [Initialize, Compile-Tier3]
     if: always() && needs.Initialize.outputs.has_builds == 'true'
     strategy:
       fail-fast: false
@@ -212,22 +227,22 @@ jobs:
       base_release_tag:  base-rolling
       pool_release_tag:  pool-rolling
 
-  Publish-Release:
-    name: Publish release
+  Publish-Firmware-Release:
+    name: Publish firmware to firmware-rolling
     needs: [Initialize, Assemble-Firmware]
     if: always() && needs.Initialize.outputs.has_builds == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - name: Download firmware
+      - name: Download per-device firmware artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: firmware-*
           path: artifacts/
           merge-multiple: true
 
-      - name: Update firmware release
+      - name: Upload to release tag (${{ env.FIRMWARE_RELEASE_TAG }})
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.FIRMWARE_RELEASE_TAG }}

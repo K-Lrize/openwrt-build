@@ -1,5 +1,6 @@
 # _extras — 归属未定的"游离池"
-# 下划线开头, devices/<dev>/packages.list 不会用 `@preset _extras` 把它整套引,
-# 但 pool 仍会编 (cs/select-chunk.sh union 所有 *.list 包括 _ 开头)。
-# 用途: 想编一个新包试试,还没决定归哪个套餐, 先丢这里, device 端 +pkg 单独装。
-# 定期 review 把成熟的包归位到正式 preset。
+#
+# 用途: 想编一个新包试试, 还没决定归哪个套餐, 先丢这里, device 端 +pkg 单独装
+# 特殊: 下划线开头, devices/<dev>/packages.list 不会用 `@preset _extras` 把它整套引,
+#       但 pool 仍会编 (scripts/ci/select-chunk.sh union 所有 *.list 含 _ 开头)
+# 维护: 定期 review 把成熟的包归位到正式 preset (架构未决事项, 见 ARCHITECTURE.md §10)

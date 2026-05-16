@@ -1,6 +1,10 @@
 # network — 网络扩展 (SQM / DNS / 防护)
+#
+# 用途: 主路由场景, 在 core 之外加 QoS / 智能 DNS / IP 防护
+# 注意: dnsmasq-full 与 IB DEFAULT_PACKAGES 的 dnsmasq 多变体冲突 —
+#       device packages.list 必须写 `-dnsmasq` 排除老变体
 
-# SQM (25.12 已支持 nft, 通过 base-config 的 iptables-nft PROVIDES 满足老 DEPENDS)
+# SQM (25.12 已原生支持 nft, 通过 base-config iptables-nft 的 PROVIDES 满足老 DEPENDS)
 sqm-scripts
 luci-app-sqm
 
@@ -8,12 +12,12 @@ luci-app-sqm
 smartdns
 luci-app-smartdns
 
-# banIP
+# banIP — IP 黑白名单防护
 banip
 luci-app-banip
 
-# dnsmasq-full (替换 IB DEFAULT_PACKAGES 的 dnsmasq, device 端要写 -dnsmasq 排除)
+# dnsmasq-full — 替换 IB 默认 dnsmasq
 dnsmasq-full
 
-# 连接跟踪 (诊断用)
+# 连接跟踪 (诊断 / sing-box redirect 模式可见)
 conntrack

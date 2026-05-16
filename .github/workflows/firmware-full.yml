@@ -1,15 +1,17 @@
-name: "[Build] Full Firmware"
+name: "[Rescue] Firmware — Full buildroot"
 
-# Manual full buildroot firmware path.
-
-permissions:
-  contents: read
+# 救援轨入口 — 用完整 buildroot 出单设备固件 (不走 SDK/IB 增量路径)。
+# 用途:
+#   - SDK/IB tar 出问题时绕过 (Base 轨坏掉的应急)
+#   - device-tree 改动冒烟测试
+#   - 深度调试 (V=s 整链路日志)
+# 仅 workflow_dispatch 触发, 不接受 push。
 
 on:
   workflow_dispatch:
     inputs:
       device:
-        description: 'Device ID'
+        description: 'Device ID (devices/<dev>/)'
         required: true
         default: 'mt3600be'
       openwrt_repo:
@@ -21,21 +23,24 @@ on:
         default: 'main'
         required: true
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    name: Build firmware
+  Build-Firmware-Full:
+    name: Full buildroot firmware (${{ inputs.device }})
     runs-on: ubuntu-24.04
     env:
       DEVICE: ${{ inputs.device }}
       CONFIG_REPO_DIR: build-config
-      CCACHE_BASEDIR: ${{ github.workspace }} 
+      CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
       SCCACHE_CACHE_SIZE: 2G
 
     steps:
-      - name: Free disk
+      - name: Free runner disk
         uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: false
@@ -46,7 +51,7 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - name: Install deps
+      - name: Install host build deps
         run: |
           sudo apt-get update -q
           sudo apt-get install -y \
@@ -55,10 +60,10 @@ jobs:
             libssl-dev python3-setuptools rsync unzip zlib1g-dev \
             file wget qemu-utils ccache jq zstd device-tree-compiler
 
-      - name: Install sccache
+      - name: Install sccache (Rust 加速)
         uses: mozilla-actions/sccache-action@v0.0.10
 
-      - name: Checkout OpenWrt
+      - name: Checkout OpenWrt source
         uses: actions/checkout@v6
         with:
           repository: ${{ inputs.openwrt_repo }}
@@ -66,13 +71,13 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Checkout config
+      - name: Checkout build-config
         uses: actions/checkout@v6
         with:
           path: ${{ env.CONFIG_REPO_DIR }}
           persist-credentials: false
 
-      - name: Prepare feeds and files
+      - name: Prepare feeds + merge files layer
         run: |
           bash "${CONFIG_REPO_DIR}/scripts/sdk/prepare.sh" \
             --workdir . \
@@ -81,9 +86,12 @@ jobs:
 
       - name: Compose buildroot .config
         run: |
-          # 三段: target.conf (硬件 select) + base-config (kmod + 兜底库)
-          # + packages.list 展开 (=y 翻译, -pkg 在 full buildroot 阶段忽略,
-          #   因为 -pkg 是 IB make image PACKAGES 语法,buildroot 用 .config 决定装什么)
+          # 三段拼装:
+          #   1) target.conf       硬件 select + arch 注释 + 设备 select
+          #   2) base-config       全局开关 + kmod + 兜底库 (CONFIG_DEVEL 等已在内)
+          #   3) packages.list     展开后翻译: +pkg → CONFIG_PACKAGE_pkg=y
+          #                        (-pkg 在 full buildroot 阶段忽略 — 那是 IB
+          #                         `make image PACKAGES=` 语法, buildroot 用 .config)
           cat "${CONFIG_REPO_DIR}/devices/${DEVICE}/target.conf" > .config
           echo "" >> .config
           cat "${CONFIG_REPO_DIR}/common/base-config" >> .config
@@ -94,9 +102,8 @@ jobs:
             | awk '/^\+/ { sub(/^\+/, ""); printf "CONFIG_PACKAGE_%s=y\n", $0 }' \
             >> .config
 
-      - name: Configure build
+      - name: Enable ccache + sccache + run defconfig
         run: |
-          echo "CONFIG_DEVEL=y" >> .config
           echo "CONFIG_CCACHE=y" >> .config
           echo "CONFIG_CCACHE_DIR=\"${CCACHE_DIR}\"" >> .config
           echo "CONFIG_RUST_SCCACHE=y" >> .config
@@ -106,7 +113,7 @@ jobs:
 
           bash "${CONFIG_REPO_DIR}/scripts/ib/run-image-scripts.sh" "${DEVICE}"
 
-      - name: Hash build inputs
+      - name: Hash build inputs (for cache keys)
         id: hashes
         shell: bash
         run: |
@@ -137,21 +144,21 @@ jobs:
             echo "year_week=$(date -u +%G-W%V)"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Cache ccache
+      - name: Restore ccache
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-${{ runner.os }}-${{ env.DEVICE }}-${{ steps.hashes.outputs.year_week }}
           restore-keys: ccache-${{ runner.os }}-${{ env.DEVICE }}-
 
-      - name: Cache sccache
+      - name: Restore sccache
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-${{ env.DEVICE }}-${{ steps.hashes.outputs.year_week }}
           restore-keys: sccache-${{ runner.os }}-${{ env.DEVICE }}-
 
-      - name: Cache Toolchain
+      - name: Restore toolchain cache
         uses: actions/cache@v5
         with:
           path: |
@@ -162,7 +169,7 @@ jobs:
           # Share toolchain cache by arch.
           key: toolchain-${{ runner.os }}-${{ steps.hashes.outputs.arch }}-${{ steps.hashes.outputs.toolchain_hash }}
 
-      - name: Cache language deps
+      - name: Restore language dep cache (Go modules + Cargo)
         uses: actions/cache@v5
         with:
           path: |
@@ -171,7 +178,7 @@ jobs:
           # Invalidate on feed changes.
           key: lang-${{ runner.os }}-${{ steps.hashes.outputs.feed_hash }}
 
-      - name: Cache Tarballs
+      - name: Restore source tarballs cache
         uses: actions/cache@v5
         with:
           path: |
@@ -184,20 +191,20 @@ jobs:
       - name: Download sources
         run: make download -j8 || make download -j1 V=s
 
-      - name: Build tools
+      - name: Build host tools
         run: make tools/install -j$(nproc) || make tools/install -j1 V=s
 
-      - name: Build Toolchain
+      - name: Build toolchain
         run: make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
 
-      - name: Build Firmware
+      - name: Build firmware
         run: |
           mkdir -p $CCACHE_DIR $SCCACHE_DIR
           make -j$(nproc) BUILD_LOG=1 || make -j1 V=s
           ccache -s
           "${SCCACHE_PATH:-sccache}" -s || true
 
-      - name: Inspect Cache Paths
+      - name: Inspect cache paths
         if: always()
         shell: bash
         run: |
@@ -215,7 +222,7 @@ jobs:
           fi
           echo "::endgroup::"
 
-      - name: Upload logs
+      - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -224,7 +231,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
-      - name: Collect outputs
+      - name: Collect firmware outputs + checksums
         run: |
           output_dir="bin/outputs"
           mkdir -p "${output_dir}"
@@ -237,7 +244,7 @@ jobs:
           bash "${CONFIG_REPO_DIR}/scripts/ci/checksums.sh" "${output_dir}"
           mv "${output_dir}/sha256sums.txt" "${output_dir}/${DEVICE}-sha256sums.txt"
 
-      - name: Upload firmware
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v7
         with:
           name: firmware-${{ inputs.device }}

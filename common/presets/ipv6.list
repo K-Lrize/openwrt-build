@@ -1,9 +1,13 @@
 # ipv6 — IPv6 协议栈 + WireGuard
-# WireGuard 放这里是因为常跟 IPv6 一起部署 (隧道 over v6),
-# 想分开的话可以拆成 wireguard.list,目前归 ipv6 减少 preset 数量。
+#
+# 用途: 有 IPv6 部署或 WireGuard 隧道需求的设备
+# 备注: WireGuard 常与 IPv6 一起部署 (tunnel over v6), 暂归 ipv6 减少 preset 数量;
+#       后续如需独立装 WireGuard, 可拆出 wireguard.list
 
+# IPv6 DHCP 客户端 / 服务端 (v6-only RA + DHCPv6)
 odhcp6c
 odhcpd-ipv6only
 
+# WireGuard 用户态 + LuCI 配置入口
 wireguard-tools
 luci-proto-wireguard

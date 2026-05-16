@@ -1,16 +1,16 @@
-name: "[Reusable] Package Pool Finalizer"
+name: "[Reusable] Pool — Aggregate + index + publish"
 
 # Reusable: 把所有 _pool-build.yml 上传的 chunk artifact 合成 per-arch tarball
-# (pool-<arch>-<source>.tar.zst) + 跨 arch 的 pool manifest sidecar,推到 rolling release。
+# (pool-<arch>-<source>.tar.zst) + 跨 arch 单文件 manifest sidecar, 推 pool-rolling。
 #
-# 用一个任选 SDK tarball 借 scripts/ipkg-make-index.sh 与 apk 生成 Packages.gz /
-# APKINDEX.tar.gz —— host-native,无 docker。
+# 借任选一个 SDK tarball 的 scripts/ipkg-make-index.sh + host apk 命令生成
+# Packages.gz / APKINDEX.tar.gz 索引 — host-native, 无 docker。
 
 on:
   workflow_call:
     inputs:
       indexer_sdk_tar_name:
-        description: 'finalize 用的 SDK tar asset 名 (任选一个 target,用于借 ipkg-make-index.sh)'
+        description: 'finalize 用的 SDK tar asset 名 (任选一个 target, ipkg-make-index 跨 target 同构)'
         type: string
         required: true
       source_slug:
@@ -18,7 +18,7 @@ on:
         type: string
         required: true
       pool_manifest_name:
-        description: '跨 arch pool manifest sidecar 文件名'
+        description: '跨 arch 单文件 manifest sidecar 文件名'
         type: string
         required: true
       base_release_tag:
@@ -39,10 +39,10 @@ permissions:
 
 jobs:
   Finalize-Pool:
-    name: Publish package pool
+    name: Aggregate + index + publish to pool-rolling
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout build-config
         uses: actions/checkout@v6
 
       - name: Install host deps
@@ -51,14 +51,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gawk gzip jq zstd
 
-      - name: Download pool chunks
+      - name: Download per-chunk artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: pool-chunk-*-${{ inputs.source_slug }}-*
           path: pool/
           merge-multiple: true
 
-      - name: Download SDK tarball (for ipkg-make-index.sh)
+      - name: Download SDK for ipkg-make-index.sh
         shell: bash
         env:
           GH_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
@@ -74,7 +74,7 @@ jobs:
           tar --use-compress-program=unzstd -xf "$SDK_TAR_NAME" \
               -C sdk-indexer --strip-components=1
 
-      - name: Generate indices for each arch/feed
+      - name: Generate Packages.gz + APKINDEX.tar.gz (sdk/index.sh)
         shell: bash
         run: |
           set -e
@@ -83,7 +83,7 @@ jobs:
           find pool/ -name '.reports' -prune -exec rm -rf {} + 2>/dev/null || true
 
           if [ -z "$(find pool/ -type f \( -name '*.ipk' -o -name '*.apk' \) 2>/dev/null)" ]; then
-            echo "::warning::pool/ 下无 ipk/apk,跳过索引与打包。"
+            echo "::warning::pool/ 下无 ipk/apk, 跳过索引与打包。"
             exit 0
           fi
 
@@ -96,14 +96,14 @@ jobs:
           SOURCE_SLUG:        ${{ inputs.source_slug }}
         run: |
           set -e
-          # 命名规则单点 — pool tar 名走 asset-names.sh,改命名只动 lib
+          # 命名规则单点 — pool tar 名走 asset-names.sh, 改命名只动 lib
           source scripts/lib/slugify.sh
           source scripts/lib/asset-names.sh
 
           mkdir -p release-staging
 
           if [ ! -d pool ] || [ -z "$(find pool/ -mindepth 1 -maxdepth 1 -type d 2>/dev/null)" ]; then
-            echo "::warning::pool 为空,跳过 release artifacts。"
+            echo "::warning::pool 为空, 跳过 release artifacts。"
             : > "release-staging/${POOL_MANIFEST_NAME}"
             exit 0
           fi
@@ -127,7 +127,7 @@ jobs:
             | sort -u > "release-staging/${POOL_MANIFEST_NAME}"
           echo "pool manifest 包数量: $(wc -l < release-staging/${POOL_MANIFEST_NAME} | tr -d ' ')"
 
-      - name: Update pool release
+      - name: Upload to release tag (${{ inputs.pool_release_tag }})
         if: ${{ inputs.update_release }}
         uses: softprops/action-gh-release@v3
         with:

@@ -1,5 +1,8 @@
 # proxy — 代理 / 透明转发
-# 当前只有 sing-box (feeds/local 自维护)。如未来加 passwall / openclash / mihomo,
-# 各放到这里 (注意它们之间互相 conflicts, device 端按需 +/-)。
+#
+# 用途: 主路由透明代理场景
+# 注意: 如后续加 passwall / openclash / mihomo, 它们之间互相 conflicts,
+#       device packages.list 必须显式 +/- 选一个变体
 
+# 当前只有 sing-box (feeds/local 自维护)
 sing-box

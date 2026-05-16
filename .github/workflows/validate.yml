@@ -1,8 +1,10 @@
-name: "[CI] Validate Configuration"
+name: "[CI] Validate configuration"
 
-env:
-  DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
-  DEFAULT_OPENWRT_REF: main
+# CI 轨 — lint + defconfig dry-run, 不出固件。
+#   1. Lint-Presets  static 检查 presets/*.list 与 devices/*/{target.conf,packages.list}
+#   2. Validate      per device 跑 SDK defconfig, 校验种子 =y 行是否保留
+#
+# 触发: push / pull_request 改动配置类文件; workflow_dispatch 可单设备调试。
 
 on:
   push:
@@ -42,32 +44,37 @@ on:
         default: 'main'
         required: true
 
+env:
+  DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
+  DEFAULT_OPENWRT_REF: main
+
 jobs:
   Lint-Presets:
     name: Lint presets + devices
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout build-config
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Static lint
+
+      - name: Run lint-presets.sh
         run: bash scripts/ci/lint-presets.sh
 
-  Prepare:
-    name: Prepare
+  Initialize:
+    name: Compute device matrix
     runs-on: ubuntu-latest
     outputs:
       device_matrix: ${{ steps.set-matrix.outputs.device_matrix }}
-      has_builds: ${{ steps.set-matrix.outputs.has_builds }}
+      has_builds:    ${{ steps.set-matrix.outputs.has_builds }}
     steps:
-      - name: Checkout config
+      - name: Checkout build-config
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Build matrix
+      - name: Compute matrix (override or auto)
         id: set-matrix
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -81,20 +88,20 @@ jobs:
             bash scripts/ci/calculate-matrix.sh
           fi
 
-  Validate:
-    needs: Prepare
-    if: needs.Prepare.outputs.has_builds == 'true'
+  Validate-Defconfig:
+    name: Defconfig dry-run (${{ matrix.device }})
+    needs: Initialize
+    if: needs.Initialize.outputs.has_builds == 'true'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        device: ${{ fromJSON(needs.Prepare.outputs.device_matrix) }}
-    name: ${{ matrix.device }}
+        device: ${{ fromJSON(needs.Initialize.outputs.device_matrix) }}
     env:
       CONFIG_REPO_DIR: build-config
 
     steps:
-      - name: Checkout OpenWrt
+      - name: Checkout OpenWrt source
         uses: actions/checkout@v6
         with:
           repository: ${{ github.event.inputs.openwrt_repo || env.DEFAULT_OPENWRT_REPO }}
@@ -102,38 +109,39 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Checkout config
+      - name: Checkout build-config
         uses: actions/checkout@v6
         with:
           path: ${{ env.CONFIG_REPO_DIR }}
           persist-credentials: false
 
-      - name: Install deps
+      - name: Install host deps
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
             build-essential git libncurses-dev \
             python3 python3-setuptools unzip jq
 
-      - name: Prepare feeds
+      - name: Prepare feeds (sdk/prepare.sh)
         run: |
           set -o pipefail
           bash "${CONFIG_REPO_DIR}/scripts/sdk/prepare.sh" \
             --workdir . \
             --device "${{ matrix.device }}"
 
-      - name: Compose seed .config (target + base + expanded packages)
+      - name: Compose seed .config + run defconfig
         env:
           DEVICE: ${{ matrix.device }}
         run: |
           set -o pipefail
-          # 1. target.conf (硬件 + arch 注释 + 设备 select)
+          # 三段种子拼装 (与 firmware-full.yml 保持一致):
+          #   1) target.conf      硬件 + arch 注释 + 设备 select
+          #   2) base-config      全局开关 + kmod + 兜底库
+          #   3) packages.list 展开后翻译: +pkg → CONFIG_PACKAGE_pkg=y
+          #      (-pkg 是 IB make image 语法, buildroot defconfig 不识别)
           cat "${CONFIG_REPO_DIR}/devices/${DEVICE}/target.conf" > .config
-          # 2. base-config (kmod + toolchain + provides 兜底 + 全设备通用强制内置)
           echo "" >> .config
           cat "${CONFIG_REPO_DIR}/common/base-config" >> .config
-          # 3. packages.list 展开后翻译: +pkg → CONFIG_PACKAGE_pkg=y, -pkg 在 defconfig 阶段忽略
-          #    (-pkg 是给 IB make image PACKAGES= 的语法,buildroot defconfig 不识别)
           echo "" >> .config
           bash "${CONFIG_REPO_DIR}/scripts/lib/expand-packages.sh" \
               "${CONFIG_REPO_DIR}/devices/${DEVICE}/packages.list" \
@@ -141,6 +149,7 @@ jobs:
             | awk '/^\+/ { sub(/^\+/, ""); printf "CONFIG_PACKAGE_%s=y\n", $0 }' \
             >> .config
 
+          # validate 阶段关掉 ccache/sccache, 防止跟 CONFIG_DEVEL 共存时 defconfig 报错
           echo "CONFIG_CCACHE=n" >> .config
           echo "CONFIG_RUST_SCCACHE=n" >> .config
 
@@ -154,7 +163,7 @@ jobs:
           cat .config
           echo "::endgroup::"
 
-      - name: Validate config
+      - name: Validate config (ci/validate-config.sh)
         run: |
           set -o pipefail
           bash "${CONFIG_REPO_DIR}/scripts/ci/validate-config.sh" "${{ matrix.device }}"

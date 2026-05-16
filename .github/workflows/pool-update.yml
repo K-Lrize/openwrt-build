@@ -1,22 +1,20 @@
-name: "[Build] Update package pool"
+name: "[Build] Pool — Package Pool Update"
 
-# 独立的 Pool 增量入口:
-#   - 不重建 SDK / IB,从 rolling release 下载已有 SDK tar
-#   - checkout 拿当前分支最新的 common/presets/*.list (G2 套餐方案)
-#   - 失败不染红 base.yml;本工作流自身允许红,便于关注修复进度
+# Pool 轨入口 — 独立的 Pool 增量重建, 不重建 SDK/IB:
+#   - 从 base-rolling 下载已有 SDK tar (不重复跑 buildroot)
+#   - checkout 当前分支最新 common/presets/*.list (G2 套餐方案)
+#   - 4-chunk 并发跑 sdk/compile, 然后聚合成 per-arch tarball 推 pool-rolling
+#   - 失败不染红 base.yml (物理分两个 run); 本工作流自身允许红, 便于关注修复进度
 #
-# 触发方式:
-#   - push: common/presets/** / feeds/local/** 等改了自动跑
-#   - base.yml 末尾 gh CLI 触发 (base 重建后 SDK 变了, pool 必须重建)
+# 触发:
+#   - push: common/presets / feeds / scripts/sdk / scripts/ci/select-chunk.sh /
+#           _pool-*.yml / pool-update.yml
+#   - base.yml 末尾 gh CLI 触发 (Base 重建后 SDK 变了, Pool 必须跟着重建)
 #   - workflow_dispatch (改 strict / 仅刷 release 时手动跑)
-
-permissions:
-  contents: write
-  actions: read
-
-env:
-  DEFAULT_OPENWRT_REF: main
-  DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
+#
+# 产物 (release tag = pool-rolling):
+#   pool-<arch>-<source>.tar.zst
+#   pool-<source>.manifest.txt  (跨 arch 单文件)
 
 on:
   push:
@@ -51,21 +49,29 @@ on:
         type: boolean
         default: true
 
+permissions:
+  contents: write
+  actions: read
+
+env:
+  DEFAULT_OPENWRT_REF: main
+  DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
+
 jobs:
   Initialize:
-    name: Prepare
+    name: Compute pool matrix
     runs-on: ubuntu-24.04
     outputs:
-      target_matrix_with_meta:    ${{ steps.matrix.outputs.target_matrix_with_meta }}
-      source_slug:                ${{ steps.matrix.outputs.source_slug }}
-      pool_manifest_name:         ${{ steps.matrix.outputs.pool_manifest_name }}
-      indexer_sdk_tar_name:  ${{ steps.matrix.outputs.indexer_sdk_tar_name }}
-      has_builds:                 ${{ steps.matrix.outputs.has_builds }}
+      target_matrix_with_meta:  ${{ steps.matrix.outputs.target_matrix_with_meta }}
+      source_slug:              ${{ steps.matrix.outputs.source_slug }}
+      pool_manifest_name:       ${{ steps.matrix.outputs.pool_manifest_name }}
+      indexer_sdk_tar_name:     ${{ steps.matrix.outputs.indexer_sdk_tar_name }}
+      has_builds:               ${{ steps.matrix.outputs.has_builds }}
     steps:
-      - name: Checkout
+      - name: Checkout build-config
         uses: actions/checkout@v6
 
-      - name: Build matrix
+      - name: Compute target matrix + asset names
         id: matrix
         env:
           OPENWRT_REPO: ${{ inputs.openwrt_repo || env.DEFAULT_OPENWRT_REPO }}
@@ -73,7 +79,7 @@ jobs:
         run: bash scripts/ci/calculate-matrix.sh
 
   Build-Pool:
-    name: Build pool
+    name: Build pool (per target)
     needs: Initialize
     if: needs.Initialize.outputs.has_builds == 'true'
     strategy:
@@ -86,19 +92,18 @@ jobs:
       target_slug:       ${{ matrix.entry.target_slug }}
       source_slug:       ${{ needs.Initialize.outputs.source_slug }}
       base_release_tag:  base-rolling
-      # push 触发时 inputs.strict 为 null → 默认 true
-      # workflow_dispatch 时尊重用户传值 (true/false 都正确)
+      # push 触发时 inputs.strict 为 null → 默认 true; workflow_dispatch 时尊重用户传值
       strict:            ${{ inputs.strict == null && true || inputs.strict }}
 
   Finalize-Pool:
-    name: Finalize pool
+    name: Aggregate per-arch tarballs + index + publish
     needs: [Initialize, Build-Pool]
     if: needs.Initialize.outputs.has_builds == 'true'
     uses: ./.github/workflows/_pool-finalize.yml
     with:
-      indexer_sdk_tar_name: ${{ needs.Initialize.outputs.indexer_sdk_tar_name }}
-      source_slug:               ${{ needs.Initialize.outputs.source_slug }}
-      pool_manifest_name:        ${{ needs.Initialize.outputs.pool_manifest_name }}
-      base_release_tag:          base-rolling
-      pool_release_tag:          pool-rolling
-      update_release:            ${{ inputs.update_release == null && true || inputs.update_release }}
+      indexer_sdk_tar_name:  ${{ needs.Initialize.outputs.indexer_sdk_tar_name }}
+      source_slug:           ${{ needs.Initialize.outputs.source_slug }}
+      pool_manifest_name:    ${{ needs.Initialize.outputs.pool_manifest_name }}
+      base_release_tag:      base-rolling
+      pool_release_tag:      pool-rolling
+      update_release:        ${{ inputs.update_release == null && true || inputs.update_release }}
