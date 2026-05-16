@@ -7,7 +7,7 @@
 # 用法:
 #   ib/make-image.sh \
 #       --workdir <IB_ROOT>          必填,已解压且 prepare-repo 完毕的 IB 根
-#       --conf-dir <BUILD_CONFIG>    必填,build-config 仓库根 (供 merge-assets.sh)
+#       --conf-dir <BUILD_CONFIG>    必填,build-config 仓库根 (供 merge-files.sh)
 #       --device <DEVICE_SLUG>       必填,设备 slug,merge-assets 用
 #       --profile <PROFILE>          必填,IB make image PROFILE
 #       --packages <STR>             必填,空格分隔的包名清单 (IB make image PACKAGES)
@@ -60,8 +60,8 @@ fi
 
 cd "$WORKDIR"
 
-echo "::group::ib/make-image: merge-assets ($DEVICE)"
-bash "$CONF_DIR/scripts/build/merge-assets.sh" "$DEVICE"
+echo "::group::ib/make-image: merge-files ($DEVICE)"
+bash "$CONF_DIR/scripts/ib/merge-files.sh" "$DEVICE"
 echo "::endgroup::"
 
 echo "::group::ib/make-image: make image PROFILE=$PROFILE"

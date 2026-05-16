@@ -114,9 +114,10 @@ jobs:
         run: |
           set -e
           source build-config/scripts/lib/extract-config.sh
-          DEVICE_CONFIG="build-config/devices/${DEVICE}/.config"
-          PROFILE=$(extract_profile "$DEVICE_CONFIG")
-          PACKAGES=$(extract_packages "$DEVICE_CONFIG" | tr '\n' ' ')
+          source build-config/scripts/lib/expand-packages.sh
+          DEVICE_DIR="build-config/devices/${DEVICE}"
+          PROFILE=$(extract_profile "$DEVICE_DIR/target.conf")
+          PACKAGES=$(expand_packages_for_ib "$DEVICE_DIR/packages.list" "build-config/common/presets")
 
           bash build-config/scripts/ib/make-image.sh \
             --workdir ib-work \

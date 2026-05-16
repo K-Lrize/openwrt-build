@@ -21,6 +21,17 @@ on:
       openwrt_ref:
         description: 'OpenWrt ref'
         default: 'main'
+  push:
+    branches: [main]
+    paths:
+      - 'common/base-config'
+      - 'common/feeds.conf'
+      - 'feeds/local/**'
+      - 'scripts/sdk/**'
+      - 'scripts/lib/**'
+      - 'scripts/ci/calculate-matrix.sh'
+      - '.github/workflows/_base-target.yml'
+      - '.github/workflows/base.yml'
   schedule:
     - cron: '0 0 1,15 * *'
 
@@ -89,10 +100,9 @@ jobs:
           prerelease: true
           make_latest: false
 
-  # Pool 编译已物理拆出到 pool-update.yml（独立 workflow_dispatch run）。
-  # GHA 不允许 reusable workflow caller 加 continue-on-error，本 job 用 gh CLI
-  # 触发 pool-update.yml 后立即返回——Pool 真正成败由那个独立 run 承载，
-  # 不会污染本 workflow 的红绿态。修复 config 后也可直接手动重新 dispatch。
+  # Pool 编译物理上拆在 pool-update.yml,因为 SDK/IB 跟 packages.txt 是两种东西,
+  # 各自有独立的"配置出问题独立修"路径。这里 Base 完成后用 gh CLI 触发 pool 重建
+  # (SDK 变了,pool 必须跟着重建)。Pool 失败不会污染本 workflow 的红绿态。
   Trigger-Pool-Update:
     name: Trigger pool update
     needs: [Initialize, Build-Base]

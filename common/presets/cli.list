@@ -1,0 +1,25 @@
+# cli — CLI 增强 + 诊断 + 文件同步
+# 给"有 shell 进路由排查"的设备装,低端 (8MB flash) 设备不用引
+
+# Shell + 编辑器
+zsh
+vim-full
+tmux
+
+# 数据处理 / 诊断
+jq
+ncdu
+lsof
+htop
+tcpdump
+socat
+drill
+
+# Git + 大文件同步
+git
+git-http
+rsync
+openssh-sftp-server
+
+# 网络性能
+iperf3

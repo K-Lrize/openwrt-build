@@ -1,0 +1,6 @@
+# monitoring — 流量统计 + 指标暴露
+# 给愿意挂监控的设备装,默认不进 core
+
+nlbwmon
+luci-app-nlbwmon
+prometheus-node-exporter-lua

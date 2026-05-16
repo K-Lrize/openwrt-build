@@ -3,11 +3,9 @@ name: "[Reusable] Target Base Builder"
 # Reusable: build SDK and ImageBuilder per target,产出三件套推到 rolling release:
 #   1. SDK tarball     (内嵌 base-packages/,供 pool/firmware-packages 阶段 sdk/prepare 自动注入 src-link)
 #   2. IB tarball      (供 firmware-image 阶段本地 tar -x 后直接 make image)
-#   3. IB manifest     (供 firmware analyze-diff 做 Tier1 已装包减法)
+#   3. IB manifest     (历史遗留 — 上游 probe-missing.sh 已用 IB make manifest dry-run
+#                      取代基于 manifest sidecar 的 diff,保留以备 debug 用)
 # 文件名规则集中在 scripts/lib/asset-names.sh。
-#
-# 历史:本 workflow 曾把 SDK/IB 打成 docker 镜像推 GHCR,但所有消费端都在
-# ubuntu-24.04 runner 上,docker 只是不必要的传输容器 — 直接走 tarball 更简单。
 
 on:
   workflow_call:
@@ -105,8 +103,9 @@ jobs:
           # 选中后,自动 select 它在 target/linux/<board>/image/<sub>.mk 里
           # 声明的 DEVICE_PACKAGES (如 mt7990-firmware / kmod-hwmon-pwmfan)。
           # 这样 IB tar 内就有这些 device-specific 包,IB build 不再报缺。
+          # G2 套餐方案后 device select 在 devices/<dev>/target.conf。
           device_re="^CONFIG_TARGET_${target_main}_${target_sub}_DEVICE_.+=y\$"
-          for cfg in build-config/devices/*/.config; do
+          for cfg in build-config/devices/*/target.conf; do
               [ -f "$cfg" ] || continue
               if grep -qE "$device_re" "$cfg"; then
                   echo "Merging device select from: $cfg"

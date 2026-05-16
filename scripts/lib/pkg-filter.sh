@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/lib/pkg-filter.sh
 #
-# 包名清单清洗的唯一权威。所有「从 custom-packages.txt 或 missing JSON 出来的
+# 包名清单清洗的唯一权威。所有「从 presets/*.list 或 missing JSON 出来的
 # 包名列表」入口都该走这里,避免 sed/grep 规则散落在多个脚本。
 #
 # 用法 (source 后作为 bash 函数调用):

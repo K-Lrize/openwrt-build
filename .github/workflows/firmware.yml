@@ -18,9 +18,16 @@ on:
     branches: [main]
     paths:
       - 'devices/**'
-      - 'common/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
+      - 'common/files/**'
+      - 'common/scripts/**'
+      - 'scripts/ib/**'
+      - 'scripts/lib/**'
+      - 'scripts/ci/calculate-matrix.sh'
+      - 'scripts/ci/merge-missing-info.sh'
+      - 'scripts/ci/checksums.sh'
+      - '.github/workflows/firmware.yml'
+      - '.github/workflows/_firmware-image.yml'
+      - '.github/workflows/_firmware-packages.yml'
   workflow_dispatch:
     inputs:
       openwrt_repo:
@@ -120,9 +127,10 @@ jobs:
         env:
           DEVICE: ${{ matrix.device }}
         run: |
-          bash build-config/scripts/firmware/probe-missing.sh \
+          bash build-config/scripts/ib/probe-missing.sh \
             --workdir ib-work \
-            --device-config "build-config/devices/${DEVICE}/.config" \
+            --device-dir "build-config/devices/${DEVICE}" \
+            --conf-dir build-config \
             --output "${DEVICE}.json" \
             --conflicts "${DEVICE}.conflicts.txt"
 
@@ -134,7 +142,7 @@ jobs:
         run: |
           if [ -s "${DEVICE}.conflicts.txt" ]; then
             while IFS= read -r pkg; do
-              echo "::warning::${DEVICE}: '$pkg' 触发 conflict — 应在 devices/${DEVICE}/.config 用 '# CONFIG_PACKAGE_${pkg} is not set' 排除"
+              echo "::warning::${DEVICE}: '$pkg' 触发 conflict — 在 devices/${DEVICE}/packages.list 加一行 '-${pkg}' 排除"
             done < "${DEVICE}.conflicts.txt"
           fi
 

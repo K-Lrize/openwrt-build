@@ -60,7 +60,7 @@ jobs:
           tar --use-compress-program=unzstd -xf "$SDK_TAR_NAME" \
               -C sdk-work --strip-components=1
 
-      - name: Materialize package list + merged config
+      - name: Materialize package list + merged seed config
         shell: bash
         env:
           PACKAGES: ${{ inputs.packages }}
@@ -68,9 +68,13 @@ jobs:
           set -e
           jq -r '.[]' <<< "$PACKAGES" > missing.txt
 
-          # Tier3 不实际编 kmod,但需让 SDK defconfig 不报缺设备级 CONFIG
+          # Tier3 SDK 单包编时需要 seed .config 保留所有设备的 target select 行,
+          # 避免 SDK defconfig 报缺设备级 CONFIG_TARGET_*。
+          # G2 套餐方案后 target select 在 devices/<dev>/target.conf。
           : > combined.config
-          find build-config/devices/ -name ".config" -exec cat {} + >> combined.config
+          find build-config/devices/ -name "target.conf" -exec cat {} + >> combined.config
+          # base-config 的 kmod/=y 行也并入,SDK defconfig 阶段保留内核选项联动
+          [ -f build-config/common/base-config ] && cat build-config/common/base-config >> combined.config
 
       - name: Prepare SDK feeds
         shell: bash

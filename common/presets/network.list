@@ -1,0 +1,19 @@
+# network — 网络扩展 (SQM / DNS / 防护)
+
+# SQM (25.12 已支持 nft, 通过 base-config 的 iptables-nft PROVIDES 满足老 DEPENDS)
+sqm-scripts
+luci-app-sqm
+
+# SmartDNS
+smartdns
+luci-app-smartdns
+
+# banIP
+banip
+luci-app-banip
+
+# dnsmasq-full (替换 IB DEFAULT_PACKAGES 的 dnsmasq, device 端要写 -dnsmasq 排除)
+dnsmasq-full
+
+# 连接跟踪 (诊断用)
+conntrack

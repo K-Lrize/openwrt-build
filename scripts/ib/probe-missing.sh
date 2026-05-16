@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# scripts/firmware/probe-missing.sh
+# scripts/ib/probe-missing.sh
 #
 # 在已解压的 ImageBuilder workdir 里跑 `make manifest` dry-run,把 IB 算依赖
 # 闭包时报的 `(no such package)` / `conflicts:` 反向解析成结构化清单。
 #
-# 这是 manifest sidecar diff (scripts/firmware/analyze-diff.sh) 的取代方案 —
-# IB 才是依赖闭包的权威:
+# 为什么这是依赖闭包的权威检测:
 #   - sidecar manifest 只有包名列表,看不到 depends/conflicts 反向依赖,
 #     无法发现 libatomic1 / iptables 这类被反向依赖拉进来的缺包。
 #   - device profile 的 DEVICE_PACKAGES 是 makefile 字段而非 .config 行,
@@ -18,9 +17,10 @@
 # 都会触发 apk 报错。
 #
 # 用法:
-#   firmware/probe-missing.sh \
+#   ib/probe-missing.sh \
 #       --workdir <IB_ROOT>          必填,已解压(且 prepare-repo 完毕)的 IB 根
-#       --device-config <FILE>       必填,device 种子 .config
+#       --device-dir <DEV_DIR>       必填,devices/<dev>/ 目录路径
+#                                    脚本会自动读 target.conf + packages.list
 #       --output <FILE>              必填,JSON 数组:missing 包名清单
 #       [--conflicts <FILE>]         可选,文本清单:冲突包名 (去版本)
 #
@@ -35,45 +35,60 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/extract-config.sh
 source "$SCRIPT_DIR/../lib/extract-config.sh"
 
+SCRIPT_DIR_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib"
+# shellcheck source=../lib/expand-packages.sh
+source "$SCRIPT_DIR_LIB/expand-packages.sh"
+
 WORKDIR=""
-DEVICE_CONFIG=""
+DEVICE_DIR=""
+CONF_DIR=""
 OUTPUT=""
 CONFLICTS=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --workdir)        WORKDIR="$2"; shift 2 ;;
-        --device-config)  DEVICE_CONFIG="$2"; shift 2 ;;
-        --output)         OUTPUT="$2"; shift 2 ;;
-        --conflicts)      CONFLICTS="$2"; shift 2 ;;
+        --workdir)     WORKDIR="$2"; shift 2 ;;
+        --device-dir)  DEVICE_DIR="$2"; shift 2 ;;
+        --conf-dir)    CONF_DIR="$2"; shift 2 ;;
+        --output)      OUTPUT="$2"; shift 2 ;;
+        --conflicts)   CONFLICTS="$2"; shift 2 ;;
         -h|--help)
             awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"
             exit 0
             ;;
         *)
-            echo "::error::firmware/probe-missing: 未知参数 $1" >&2
+            echo "::error::ib/probe-missing: 未知参数 $1" >&2
             exit 2
             ;;
     esac
 done
 
-[ -n "$WORKDIR"       ] || { echo "::error::probe-missing: 缺 --workdir"       >&2; exit 2; }
-[ -n "$DEVICE_CONFIG" ] || { echo "::error::probe-missing: 缺 --device-config" >&2; exit 2; }
-[ -n "$OUTPUT"        ] || { echo "::error::probe-missing: 缺 --output"        >&2; exit 2; }
+[ -n "$WORKDIR"    ] || { echo "::error::probe-missing: 缺 --workdir"    >&2; exit 2; }
+[ -n "$DEVICE_DIR" ] || { echo "::error::probe-missing: 缺 --device-dir" >&2; exit 2; }
+[ -n "$OUTPUT"     ] || { echo "::error::probe-missing: 缺 --output"     >&2; exit 2; }
 
 WORKDIR="$(cd "$WORKDIR" && pwd)"
-DEVICE_CONFIG="$(cd "$(dirname "$DEVICE_CONFIG")" && pwd)/$(basename "$DEVICE_CONFIG")"
+DEVICE_DIR="$(cd "$DEVICE_DIR" && pwd)"
+# CONF_DIR 缺省: device 父目录的父目录 (即 devices/<dev> 的 build-config 仓库根)
+if [ -z "$CONF_DIR" ]; then
+    CONF_DIR="$(cd "$DEVICE_DIR/../.." && pwd)"
+else
+    CONF_DIR="$(cd "$CONF_DIR" && pwd)"
+fi
 mkdir -p "$(dirname "$OUTPUT")"
 OUTPUT="$(cd "$(dirname "$OUTPUT")" && pwd)/$(basename "$OUTPUT")"
 [ -n "$CONFLICTS" ] && { mkdir -p "$(dirname "$CONFLICTS")"; CONFLICTS="$(cd "$(dirname "$CONFLICTS")" && pwd)/$(basename "$CONFLICTS")"; }
 
-[ -f "$WORKDIR/Makefile" ] || { echo "::error::probe-missing: $WORKDIR 不像 IB 根 (缺 Makefile)" >&2; exit 1; }
-[ -f "$DEVICE_CONFIG"    ] || { echo "::error::probe-missing: $DEVICE_CONFIG 不存在" >&2; exit 1; }
+[ -f "$WORKDIR/Makefile"         ] || { echo "::error::probe-missing: $WORKDIR 不像 IB 根 (缺 Makefile)" >&2; exit 1; }
+[ -f "$DEVICE_DIR/target.conf"   ] || { echo "::error::probe-missing: $DEVICE_DIR/target.conf 不存在" >&2; exit 1; }
+[ -f "$DEVICE_DIR/packages.list" ] || { echo "::error::probe-missing: $DEVICE_DIR/packages.list 不存在" >&2; exit 1; }
+[ -d "$CONF_DIR/common/presets"  ] || { echo "::error::probe-missing: $CONF_DIR/common/presets/ 不存在" >&2; exit 1; }
 
-PROFILE=$(extract_profile "$DEVICE_CONFIG")
-PACKAGES=$(extract_packages "$DEVICE_CONFIG" | tr '\n' ' ')
+# 从 target.conf 提 PROFILE,从 packages.list 通过 expand_packages 展开 + 翻译成 IB PACKAGES 串
+PROFILE=$(extract_profile "$DEVICE_DIR/target.conf")
+PACKAGES=$(expand_packages_for_ib "$DEVICE_DIR/packages.list" "$CONF_DIR/common/presets")
 
-[ -n "$PROFILE" ] || { echo "::error::probe-missing: 无法从 $DEVICE_CONFIG 提取 PROFILE" >&2; exit 1; }
+[ -n "$PROFILE" ] || { echo "::error::probe-missing: 无法从 $DEVICE_DIR/target.conf 提取 PROFILE" >&2; exit 1; }
 
 echo "::group::probe-missing: make manifest PROFILE=$PROFILE"
 echo "PROFILE:  $PROFILE"

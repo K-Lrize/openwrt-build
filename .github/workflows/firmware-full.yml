@@ -18,7 +18,7 @@ on:
         required: true
       openwrt_ref:
         description: 'OpenWrt ref'
-        default: '2026-05-03'
+        default: 'main'
         required: true
 
 jobs:
@@ -77,8 +77,22 @@ jobs:
           bash "${CONFIG_REPO_DIR}/scripts/sdk/prepare.sh" \
             --workdir . \
             --device "${DEVICE}"
-          cp "${CONFIG_REPO_DIR}/devices/${DEVICE}/.config" .config
-          bash "${CONFIG_REPO_DIR}/scripts/build/merge-assets.sh" "${DEVICE}"
+          bash "${CONFIG_REPO_DIR}/scripts/ib/merge-files.sh" "${DEVICE}"
+
+      - name: Compose buildroot .config
+        run: |
+          # 三段: target.conf (硬件 select) + base-config (kmod + 兜底库)
+          # + packages.list 展开 (=y 翻译, -pkg 在 full buildroot 阶段忽略,
+          #   因为 -pkg 是 IB make image PACKAGES 语法,buildroot 用 .config 决定装什么)
+          cat "${CONFIG_REPO_DIR}/devices/${DEVICE}/target.conf" > .config
+          echo "" >> .config
+          cat "${CONFIG_REPO_DIR}/common/base-config" >> .config
+          echo "" >> .config
+          bash "${CONFIG_REPO_DIR}/scripts/lib/expand-packages.sh" \
+              "${CONFIG_REPO_DIR}/devices/${DEVICE}/packages.list" \
+              "${CONFIG_REPO_DIR}/common/presets" \
+            | awk '/^\+/ { sub(/^\+/, ""); printf "CONFIG_PACKAGE_%s=y\n", $0 }' \
+            >> .config
 
       - name: Configure build
         run: |
@@ -90,7 +104,7 @@ jobs:
 
           make defconfig
 
-          bash "${CONFIG_REPO_DIR}/scripts/build/run-firmware-scripts.sh" "${DEVICE}"
+          bash "${CONFIG_REPO_DIR}/scripts/ib/run-image-scripts.sh" "${DEVICE}"
 
       - name: Hash build inputs
         id: hashes

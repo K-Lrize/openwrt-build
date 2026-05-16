@@ -1,0 +1,22 @@
+# core — 所有路由器都要的基础包
+#
+# 任何 devices/<dev>/packages.list 几乎都该 @preset core。
+# 这里只放"硬件无关、几乎所有路由场景都用"的最小集合。
+# 注意: base-config 已经 =y 的包不必在这里重写 (luci/curl/ca-bundle 等),
+# 但写进来不报错也无害,代价仅多一次解析。
+
+# LuCI 核心
+luci
+luci-base
+luci-ssl
+luci-mod-admin-full
+luci-app-firewall
+luci-app-uhttpd
+luci-theme-bootstrap
+
+# 网络基础
+wget-ssl
+nftables-json
+
+# 内存压缩
+zram-swap

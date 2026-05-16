@@ -2,8 +2,8 @@
 # scripts/sdk/compile.sh
 #
 # 在「已 prepare 过的 SDK workdir」里跑配置式批量编译。
-# 取代旧 scripts/build/compile-in-sdk.sh 的编译逻辑(不含 docker run)。
-# Pool / Tier3 两条线共用,差异只通过参数体现。
+# Pool 轨 (大规模配方编译) 与 Firmware 轨 Tier3 (兜底补编) 两条线共用,
+# 差异只通过 --seed-config / --strict 等参数体现。
 #
 # 用法:
 #   sdk/compile.sh \

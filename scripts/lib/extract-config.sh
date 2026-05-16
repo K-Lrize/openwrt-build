@@ -5,12 +5,11 @@
 # 不修改文件、不依赖工作目录。
 #
 # 兼容两种格式：
-#   - 种子格式（devices/<dev>/.config）：
+#   - 种子格式（devices/<dev>/target.conf, G2 套餐方案后）：
+#       # arch: <arch_packages>          (顶部注释, 架构不变量 #6)
 #       CONFIG_TARGET_<main>=y
 #       CONFIG_TARGET_<main>_<sub>=y
 #       CONFIG_TARGET_<main>_<sub>_DEVICE_<profile>=y
-#       CONFIG_PACKAGE_<pkg>=y
-#       # @arch <arch_packages>          (Phase 4 引入的 arch 注释约定)
 #   - defconfig 后格式（OpenWrt build dir 的 .config）：
 #       CONFIG_TARGET_BOARD="<main>"
 #       CONFIG_TARGET_SUBTARGET="<sub>"
@@ -19,19 +18,15 @@
 #
 # 用法（source 后调用）：
 #   source scripts/lib/extract-config.sh
-#   pkgs=$(extract_packages devices/mt3600be/.config)
-#   target=$(extract_target devices/mt3600be/.config)
+#   target=$(extract_target devices/mt3600be/target.conf)
+#   profile=$(extract_profile devices/mt3600be/target.conf)
+#   arch=$(extract_arch devices/mt3600be/target.conf)
+# G2 套餐方案后包清单走 scripts/lib/expand-packages.sh, 不再用 extract_packages。
 
-# 输出 device .config 中包的"愿望表"，喂给 IB `make image PACKAGES=...`：
-#   CONFIG_PACKAGE_xxx=y/=m         → 输出 'xxx'         (装)
-#   # CONFIG_PACKAGE_xxx is not set → 输出 '-xxx'        (从 IB 的 DEFAULT_PACKAGES /
-#                                                         PROFILE_PACKAGES 里负号排除)
-#
-# 为什么 'is not set' 也要输出：IB 装哪些包只看上游 makefile 的 DEFAULT_PACKAGES +
-# DEVICE_PACKAGES + 命令行 PACKAGES，根本不读 .config 的 =y/=m。所以 device .config
-# 里 'is not set' 在 IB 阶段必须翻译成 '-xxx' 负号语法 (IB Makefile L143-147 的
-# filter-out -% 处理) 才能真正禁掉默认包；否则会撞上 wpad-basic-mbedtls 这类
-# DEFAULT_PACKAGES 默认包与你显式选的 wpad-openssl 冲突的问题。
+# 已废弃 (新代码用 scripts/lib/expand-packages.sh): 从 defconfig 后的 .config 读
+# CONFIG_PACKAGE_xxx=y/=m → 输出 'xxx' (IB make image PACKAGES= 喂值),
+# # CONFIG_PACKAGE_xxx is not set → 输出 '-xxx' (从 IB DEFAULT_PACKAGES 排除)。
+# 仅 buildroot workdir 内仍可用 (firmware-full.yml 的兼容路径)。
 extract_packages() {
     local config="$1"
     [ -f "$config" ] || return 0
@@ -94,16 +89,16 @@ extract_profile() {
 
 # 输出 architecture（用于 ipk 命名/cache key），例如 "aarch64_cortex-a53"。
 #
-# 推导优先级:
-#   1. defconfig 后格式: CONFIG_TARGET_ARCH_PACKAGES="<arch>"
-#   2. 显式 override:    # @arch <value> 注释 (用于映射表外的稀有 target)
-#   3. 静态映射:         按 extract_target 结果 case → arch
-#                        加新 target 时在此 case 加一行,常见 device 无需写注释
+# 推导规则 (G2 套餐方案后只一种):
+#   - 优先读 defconfig 后格式 CONFIG_TARGET_ARCH_PACKAGES="<arch>" (buildroot 完成后才有)
+#   - 否则读 target.conf / .config 顶部 `# arch: <name>` 注释 (架构不变量 #6)
+#
+# 加新设备零代码改动: devices/<dev>/target.conf 顶部写一行 `# arch: <name>` 即可。
 extract_arch() {
     local config="$1"
     [ -f "$config" ] || return 0
 
-    # 1. defconfig 后格式优先
+    # 1. defconfig 后格式优先 (buildroot workdir 内调用时)
     local arch
     arch=$(grep -E '^CONFIG_TARGET_ARCH_PACKAGES=' "$config" | cut -d'"' -f2)
     if [ -n "$arch" ]; then
@@ -111,16 +106,11 @@ extract_arch() {
         return 0
     fi
 
-    # 2. 显式 # @arch 注释 override
-    arch=$(grep -E '^#[[:space:]]*@arch[[:space:]]+' "$config" \
-            | head -1 | awk '{print $3}')
+    # 2. # arch: 注释 (种子文件 target.conf 顶部)
+    arch=$(grep -E '^#[[:space:]]*arch:[[:space:]]+' "$config" \
+            | head -1 | sed -E 's/^#[[:space:]]*arch:[[:space:]]+//' | awk '{print $1}')
     if [ -n "$arch" ]; then
         echo "$arch"
         return 0
     fi
-
-    # 3. 已知 target → arch 静态映射 (加新 target 时补一行 case)
-    case "$(extract_target "$config")" in
-        mediatek/filogic)   echo "aarch64_cortex-a53" ;;
-    esac
 }

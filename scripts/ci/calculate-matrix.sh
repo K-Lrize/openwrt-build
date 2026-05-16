@@ -144,7 +144,12 @@ device_meta='{}'
 target_set=()
 
 for dev in "${BUILD_LIST[@]}"; do
-    cfg="devices/${dev}/.config"
+    cfg="devices/${dev}/target.conf"
+
+    if [ ! -f "$cfg" ]; then
+        echo "::error::device ${dev}: 缺 $cfg (G2 套餐方案要求)。"
+        exit 1
+    fi
 
     arch=$(extract_arch "$cfg")
     target=$(extract_target "$cfg")
@@ -155,8 +160,8 @@ for dev in "${BUILD_LIST[@]}"; do
     ib_manifest=$(ib_manifest_name "$target" "$OPENWRT_REPO" "$OPENWRT_REF")
 
     if [ -z "$arch" ]; then
-        echo "::warning::device ${dev} (target=${target}) 推不出 arch — 在 scripts/lib/extract-config.sh 的 case 加映射,或在 .config 顶部写 '# @arch <name>'。"
-        arch="unknown"
+        echo "::error::device ${dev} (target=${target}) 推不出 arch — 在 ${cfg} 顶部写 '# arch: <name>' (架构不变量 #6)。"
+        exit 1
     fi
     pool_tar=$(pool_tar_name "$arch" "$OPENWRT_REPO" "$OPENWRT_REF")
 

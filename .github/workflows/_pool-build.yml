@@ -77,7 +77,7 @@ jobs:
         env:
           CHUNK_ID: ${{ matrix.chunk }}
         run: |
-          bash build-config/scripts/pool/select-chunk.sh \
+          bash build-config/scripts/ci/select-chunk.sh \
             --conf-dir build-config \
             --chunk-id "$CHUNK_ID" \
             --chunk-count 4 \

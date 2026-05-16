@@ -1,0 +1,10 @@
+# mobile — 4G/5G modem + USB tethering
+# USB 网卡 / 串口 kmod 在 base-config 内 (ALL_KMODS 覆盖),这里只放用户态
+
+modemmanager
+luci-proto-modemmanager
+usb-modeswitch
+libqmi
+libmbim
+libimobiledevice
+usbutils

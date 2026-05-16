@@ -1,0 +1,9 @@
+# ipv6 — IPv6 协议栈 + WireGuard
+# WireGuard 放这里是因为常跟 IPv6 一起部署 (隧道 over v6),
+# 想分开的话可以拆成 wireguard.list,目前归 ipv6 减少 preset 数量。
+
+odhcp6c
+odhcpd-ipv6only
+
+wireguard-tools
+luci-proto-wireguard

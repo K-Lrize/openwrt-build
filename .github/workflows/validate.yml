@@ -2,23 +2,31 @@ name: "[CI] Validate Configuration"
 
 env:
   DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
-  DEFAULT_OPENWRT_REF: '2026-05-03'
+  DEFAULT_OPENWRT_REF: main
 
 on:
   push:
     paths:
-      - 'devices/**/.config'
-      - 'devices/**/feeds.conf'
+      - 'common/presets/**'
+      - 'common/base-config'
       - 'common/feeds.conf'
-      - 'common/custom-packages.txt'
-      - 'scripts/ci/lint-custom-packages.sh'
+      - 'devices/**/target.conf'
+      - 'devices/**/packages.list'
+      - 'devices/**/feeds.conf'
+      - 'scripts/ci/lint-presets.sh'
+      - 'scripts/ci/validate-config.sh'
+      - 'scripts/lib/expand-packages.sh'
   pull_request:
     paths:
-      - 'devices/**/.config'
-      - 'devices/**/feeds.conf'
+      - 'common/presets/**'
+      - 'common/base-config'
       - 'common/feeds.conf'
-      - 'common/custom-packages.txt'
-      - 'scripts/ci/lint-custom-packages.sh'
+      - 'devices/**/target.conf'
+      - 'devices/**/packages.list'
+      - 'devices/**/feeds.conf'
+      - 'scripts/ci/lint-presets.sh'
+      - 'scripts/ci/validate-config.sh'
+      - 'scripts/lib/expand-packages.sh'
   workflow_dispatch:
     inputs:
       device:
@@ -31,12 +39,12 @@ on:
         required: true
       openwrt_ref:
         description: 'OpenWrt ref'
-        default: '2026-05-03'
+        default: 'main'
         required: true
 
 jobs:
-  Lint-Packages:
-    name: Lint custom-packages.txt
+  Lint-Presets:
+    name: Lint presets + devices
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -44,7 +52,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Static lint
-        run: bash scripts/ci/lint-custom-packages.sh
+        run: bash scripts/ci/lint-presets.sh
 
   Prepare:
     name: Prepare
@@ -113,20 +121,36 @@ jobs:
           bash "${CONFIG_REPO_DIR}/scripts/sdk/prepare.sh" \
             --workdir . \
             --device "${{ matrix.device }}"
-          cp "${CONFIG_REPO_DIR}/devices/${{ matrix.device }}/.config" .config
 
-      - name: Generate config
+      - name: Compose seed .config (target + base + expanded packages)
+        env:
+          DEVICE: ${{ matrix.device }}
         run: |
+          set -o pipefail
+          # 1. target.conf (硬件 + arch 注释 + 设备 select)
+          cat "${CONFIG_REPO_DIR}/devices/${DEVICE}/target.conf" > .config
+          # 2. base-config (kmod + toolchain + provides 兜底 + 全设备通用强制内置)
+          echo "" >> .config
+          cat "${CONFIG_REPO_DIR}/common/base-config" >> .config
+          # 3. packages.list 展开后翻译: +pkg → CONFIG_PACKAGE_pkg=y, -pkg 在 defconfig 阶段忽略
+          #    (-pkg 是给 IB make image PACKAGES= 的语法,buildroot defconfig 不识别)
+          echo "" >> .config
+          bash "${CONFIG_REPO_DIR}/scripts/lib/expand-packages.sh" \
+              "${CONFIG_REPO_DIR}/devices/${DEVICE}/packages.list" \
+              "${CONFIG_REPO_DIR}/common/presets" \
+            | awk '/^\+/ { sub(/^\+/, ""); printf "CONFIG_PACKAGE_%s=y\n", $0 }' \
+            >> .config
+
           echo "CONFIG_CCACHE=n" >> .config
           echo "CONFIG_RUST_SCCACHE=n" >> .config
-          
+
           echo "::group::Seed .config"
           cat .config
           echo "::endgroup::"
-          
+
           make defconfig
-          
-          echo "::group::Final .config"
+
+          echo "::group::Final .config (defconfig 后)"
           cat .config
           echo "::endgroup::"
 

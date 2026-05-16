@@ -1,0 +1,31 @@
+# maintenance — 自动化运维 / 网络辅助 / 远控
+
+# 证书自动签发
+acme
+luci-app-acme
+
+# 健康检测 (网络丢包后自动重启)
+watchcat
+luci-app-watchcat
+
+# DDNS
+ddns-scripts
+luci-app-ddns
+
+# 定时 Wi-Fi
+wifischedule
+luci-app-wifischedule
+
+# Wake-On-LAN
+luci-app-wol
+etherwake
+
+# UPnP
+luci-app-upnp
+
+# IRQ 均衡 + 日志轮转
+irqbalance
+logrotate
+
+# wpad-openssl (替换默认 wpad-basic-mbedtls, device 端要写 -wpad-basic-mbedtls 排除)
+wpad-openssl

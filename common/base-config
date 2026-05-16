@@ -91,3 +91,53 @@ CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_luci-ssl=y
 CONFIG_PACKAGE_luci-app-firewall=y
 CONFIG_PACKAGE_luci-theme-bootstrap=y
+
+# --- [7] 系统包补齐 (Provides / 反向依赖兜底) ---
+# ALL_KMODS=y 已覆盖所有 kmod,但下列是非 kmod 的系统包,需要显式 select。
+# 很多 feeds 包通过 DEPENDS 反向引用这些名字,IB STANDALONE 装 image 时会找:
+#   - iptables-nft / nftables: sqm-scripts 等老包 DEPENDS +iptables,
+#     由 iptables-nft 通过上游 PROVIDES 满足这个别名
+#   - libatomic1 / libstdcpp6: libusb / 各种 C++ 包反向依赖
+#   - wpad-*: 编出多个变体,device .config 用 `is not set` 排除多余的,
+#     避免 apk add 时多变体冲突
+# 网络/无线 provides 别名链
+CONFIG_PACKAGE_iptables-nft=m
+CONFIG_PACKAGE_nftables=m
+CONFIG_PACKAGE_wpad-openssl=m
+CONFIG_PACKAGE_wpad-basic-mbedtls=m
+
+# Toolchain runtime + 共享运行时库 (libatomic1 同族,被 C/C++ 应用 metadata depends)
+CONFIG_PACKAGE_libatomic1=y
+CONFIG_PACKAGE_libstdcpp6=m
+CONFIG_PACKAGE_libnettle=m          # dnsmasq-full DNSSEC / gnutls
+CONFIG_PACKAGE_libgmp=m             # libnettle / python 依赖
+CONFIG_PACKAGE_libxml2=m            # 部分 LuCI / sing-box rule-set
+CONFIG_PACKAGE_libffi=m             # python / glib
+CONFIG_PACKAGE_libidn2=m            # curl IDN / DNS 国际化
+CONFIG_PACKAGE_libreadline=m        # sqlite3 cli / bash / lua 交互式
+
+# --- [8] 用户态配对 + 高频反向依赖 ---
+# 这些 SDK 单包编时不会自动 select,但 feeds 包大量依赖它们。
+# 真正"SDK 编不了"的只是 rust/go/openjdk 等 host toolchain;
+# 这一节都属于"SDK 能编但容易漏",放 base 一次性兜底。
+
+# kmod 用户态配对 (有 kmod 但没用户态,功能用不起来)
+CONFIG_PACKAGE_ppp=y                # 配合 kmod-ppp/pppoe, PPPoE 拨号
+CONFIG_PACKAGE_ppp-mod-pppoe=y
+CONFIG_PACKAGE_block-mount=y        # 配合 kmod-usb-storage, USB 自动挂载
+CONFIG_PACKAGE_e2fsprogs=y          # 配合 kmod-fs-ext4, fsck/mkfs.ext4
+
+# 加密库变体 (多 feeds 包通过 ssl provider 别名引用)
+CONFIG_PACKAGE_libmbedtls=m
+CONFIG_PACKAGE_libwolfssl=m
+
+# 反向依赖热点 (nginx / sing-box / LuCI sqlite 后端等)
+CONFIG_PACKAGE_libpcre2=m
+CONFIG_PACKAGE_libsqlite3=m
+
+# DNS/DHCP 增强变体
+# dnsmasq-full 与默认 dnsmasq 是 multi-variant 冲突包,base 选 full 后 Kconfig
+# 自动让 dnsmasq=n。但 IB 的 DEFAULT_PACKAGES 仍硬编 dnsmasq,必须在每个
+# device .config 加 `# CONFIG_PACKAGE_dnsmasq is not set` 让 extract_packages
+# 输出 `-dnsmasq` 喂给 IB PACKAGES,避免 apk add 时 conflict。
+CONFIG_PACKAGE_dnsmasq-full=y

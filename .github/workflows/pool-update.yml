@@ -1,13 +1,14 @@
 name: "[Build] Update package pool"
 
-# 独立的 Pool 修复入口:
+# 独立的 Pool 增量入口:
 #   - 不重建 SDK / IB,从 rolling release 下载已有 SDK tar
-#   - checkout 拿当前分支最新的 custom-packages.txt (修了配置随手重跑)
+#   - checkout 拿当前分支最新的 common/presets/*.list (G2 套餐方案)
 #   - 失败不染红 base.yml;本工作流自身允许红,便于关注修复进度
 #
 # 触发方式:
-#   - base.yml 末尾 gh CLI 自动触发 (首次构建一站式完成)
-#   - 手动 workflow_dispatch (修复 custom-packages.txt 后单独跑)
+#   - push: common/presets/** / feeds/local/** 等改了自动跑
+#   - base.yml 末尾 gh CLI 触发 (base 重建后 SDK 变了, pool 必须重建)
+#   - workflow_dispatch (改 strict / 仅刷 release 时手动跑)
 
 permissions:
   contents: write
@@ -16,8 +17,23 @@ permissions:
 env:
   DEFAULT_OPENWRT_REF: main
   DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
+  DEFAULT_STRICT: 'true'
+  DEFAULT_UPDATE_RELEASE: 'true'
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'common/presets/**'
+      - 'common/feeds.conf'
+      - 'feeds/local/**'
+      - 'scripts/sdk/**'
+      - 'scripts/lib/**'
+      - 'scripts/ci/select-chunk.sh'
+      - 'scripts/ci/calculate-matrix.sh'
+      - '.github/workflows/_pool-build.yml'
+      - '.github/workflows/_pool-finalize.yml'
+      - '.github/workflows/pool-update.yml'
   workflow_dispatch:
     inputs:
       openwrt_repo:
@@ -54,8 +70,8 @@ jobs:
       - name: Build matrix
         id: matrix
         env:
-          OPENWRT_REPO: ${{ inputs.openwrt_repo }}
-          OPENWRT_REF:  ${{ inputs.openwrt_ref }}
+          OPENWRT_REPO: ${{ inputs.openwrt_repo || env.DEFAULT_OPENWRT_REPO }}
+          OPENWRT_REF:  ${{ inputs.openwrt_ref  || env.DEFAULT_OPENWRT_REF }}
         run: bash scripts/ci/calculate-matrix.sh
 
   Build-Pool:
@@ -72,7 +88,7 @@ jobs:
       target_slug:       ${{ matrix.entry.target_slug }}
       source_slug:       ${{ needs.Initialize.outputs.source_slug }}
       base_release_tag:  base-rolling
-      strict:            ${{ inputs.strict }}
+      strict:            ${{ inputs.strict != null && inputs.strict || (env.DEFAULT_STRICT == 'true') }}
 
   Finalize-Pool:
     name: Finalize pool
@@ -85,4 +101,4 @@ jobs:
       pool_manifest_name:        ${{ needs.Initialize.outputs.pool_manifest_name }}
       base_release_tag:          base-rolling
       pool_release_tag:          pool-rolling
-      update_release:            ${{ inputs.update_release }}
+      update_release:            ${{ inputs.update_release != null && inputs.update_release || (env.DEFAULT_UPDATE_RELEASE == 'true') }}

@@ -1,0 +1,5 @@
+# proxy — 代理 / 透明转发
+# 当前只有 sing-box (feeds/local 自维护)。如未来加 passwall / openclash / mihomo,
+# 各放到这里 (注意它们之间互相 conflicts, device 端按需 +/-)。
+
+sing-box
