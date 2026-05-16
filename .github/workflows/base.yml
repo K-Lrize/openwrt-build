@@ -19,7 +19,7 @@ on:
     inputs:
       openwrt_repo:
         description: 'OpenWrt repo'
-        default: 'K-Lrize/openwrt'
+        default: 'openwrt/openwrt'
       openwrt_ref:
         description: 'OpenWrt ref'
         default: 'main'
@@ -44,7 +44,7 @@ permissions:
 env:
   BASE_RELEASE_TAG: base-rolling
   DEFAULT_OPENWRT_REF: main
-  DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
+  DEFAULT_OPENWRT_REPO: openwrt/openwrt
 
 jobs:
   Initialize:

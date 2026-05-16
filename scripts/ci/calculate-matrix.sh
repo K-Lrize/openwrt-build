@@ -2,7 +2,7 @@
 # 脚本职责:计算 OpenWrt 构建矩阵
 #
 # 环境变量输入 (顶层 workflow 的 Initialize job 提供):
-#   OPENWRT_REPO          上游 OpenWrt 仓库 (eg. K-Lrize/openwrt)
+#   OPENWRT_REPO          上游 OpenWrt 仓库 (eg. openwrt/openwrt)
 #   OPENWRT_REF           上游分支/tag/sha (eg. main)
 #   GITHUB_REPOSITORY     owner/repo (GHA 内置)
 #
@@ -41,7 +41,7 @@ source "$CONF_DIR/scripts/lib/slugify.sh"
 # shellcheck source=../lib/asset-names.sh
 source "$CONF_DIR/scripts/lib/asset-names.sh"
 
-OPENWRT_REPO="${OPENWRT_REPO:-K-Lrize/openwrt}"
+OPENWRT_REPO="${OPENWRT_REPO:-openwrt/openwrt}"
 OPENWRT_REF="${OPENWRT_REF:-main}"
 GH_REPO="${GITHUB_REPOSITORY:-}"
 if [ -n "$GH_REPO" ]; then

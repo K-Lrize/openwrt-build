@@ -34,7 +34,7 @@ on:
     inputs:
       openwrt_repo:
         description: 'OpenWrt repo (必须跟 base.yml 上一次构建对齐才能匹配 SDK asset 名)'
-        default: 'K-Lrize/openwrt'
+        default: 'openwrt/openwrt'
         required: true
       openwrt_ref:
         description: 'OpenWrt ref'
@@ -55,7 +55,7 @@ permissions:
 
 env:
   DEFAULT_OPENWRT_REF: main
-  DEFAULT_OPENWRT_REPO: K-Lrize/openwrt
+  DEFAULT_OPENWRT_REPO: openwrt/openwrt
 
 jobs:
   Initialize:

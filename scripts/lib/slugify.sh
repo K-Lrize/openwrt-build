@@ -8,7 +8,7 @@
 #   source scripts/lib/slugify.sh
 #   target_slug=$(slugify "mediatek/filogic")            # → mediatek-filogic
 #   ref_slug=$(slugify "release/24.10")                  # → release-24.10
-#   src_slug=$(source_slug "K-Lrize/openwrt" "main")     # → K-Lrize-openwrt-main
+#   src_slug=$(source_slug "openwrt/openwrt" "main")     # → K-Lrize-openwrt-main
 #
 # slugify 规则：
 #   1. '/' → '-'                   （路径分隔变层级分隔）

@@ -16,7 +16,7 @@ on:
         default: 'mt3600be'
       openwrt_repo:
         description: 'OpenWrt repo'
-        default: 'K-Lrize/openwrt'
+        default: 'openwrt/openwrt'
         required: true
       openwrt_ref:
         description: 'OpenWrt ref'

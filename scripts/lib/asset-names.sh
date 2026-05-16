@@ -10,15 +10,15 @@
 #   source scripts/lib/slugify.sh
 #   source scripts/lib/asset-names.sh
 #
-#   sdk_tar=$(sdk_tar_name        "mediatek/filogic" "K-Lrize/openwrt" "main")
+#   sdk_tar=$(sdk_tar_name        "mediatek/filogic" "openwrt/openwrt" "main")
 #       # → sdk-mediatek-filogic-K-Lrize-openwrt-main.tar.zst
-#   ib_tar=$(ib_tar_name          "mediatek/filogic" "K-Lrize/openwrt" "main")
+#   ib_tar=$(ib_tar_name          "mediatek/filogic" "openwrt/openwrt" "main")
 #       # → ib-mediatek-filogic-K-Lrize-openwrt-main.tar.zst
-#   ib_manifest=$(ib_manifest_name "mediatek/filogic" "K-Lrize/openwrt" "main")
+#   ib_manifest=$(ib_manifest_name "mediatek/filogic" "openwrt/openwrt" "main")
 #       # → ib-mediatek-filogic-K-Lrize-openwrt-main.manifest.txt
-#   pool_tar=$(pool_tar_name      "aarch64_cortex-a53" "K-Lrize/openwrt" "main")
+#   pool_tar=$(pool_tar_name      "aarch64_cortex-a53" "openwrt/openwrt" "main")
 #       # → pool-aarch64_cortex-a53-K-Lrize-openwrt-main.tar.zst
-#   pool_man=$(pool_manifest_name  "K-Lrize/openwrt" "main")
+#   pool_man=$(pool_manifest_name  "openwrt/openwrt" "main")
 #       # → pool-K-Lrize-openwrt-main.manifest.txt
 #
 # 约定:
