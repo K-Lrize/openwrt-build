@@ -12,13 +12,16 @@
 #          $(if $(CONFIG_SIGNATURE_CHECK),,--allow-untrusted) \
 #
 # STANDALONE 模式下完全只看 $TOPDIR/packages/packages.adb,不读外部 repo。
-# 而 IB Makefile 自带 `package_index` target,build 时会检测 packages/ 下文件是否
-# 比 packages.adb 新,如新则自动重 index(见上游 target/imagebuilder/files/Makefile:201-236)。
+# 上游 `make target/imagebuilder/install` 当前 (2026-Q2) 不预生成 packages.adb,
+# 留给用户在 `make image` 链路里通过 `package_index` target 现场生成。但
+# `make manifest` 不一定走同一条依赖链 — 索引缺失时 apk add 看到空仓,所有包
+# 都会报 `(no such package)`,包括 IB 自带的 base-files / libc / kernel。
 #
 # 因此本脚本只需:
 #   1. 校验 $WORKDIR 是 IB 根 (有 Makefile + packages/)
 #   2. 把 $PACKAGES_DIR 下的 ipk/apk 复制进 $WORKDIR/packages/
-#   3. 把 packages.adb / Packages.gz 的 mtime 倒回过去,确保 IB 触发重 index
+#   3. 显式跑一次 `make package_index` 把 IB 自带 + 注入的包统一索引到 packages.adb,
+#      让后续 probe-missing.sh / make-image.sh 看到完整闭包
 #
 # 用法:
 #   ib/prepare-repo.sh \
@@ -69,16 +72,25 @@ while IFS= read -r f; do
 done < <(find "$PACKAGES_DIR" -maxdepth 4 -type f \( -name '*.ipk' -o -name '*.apk' \))
 
 if [ "$copied" -eq 0 ]; then
-    echo "::warning::ib/prepare-repo: $PACKAGES_DIR 下无 ipk/apk,无文件注入。"
-    exit 0
+    echo "::warning::ib/prepare-repo: $PACKAGES_DIR 下无 ipk/apk,无文件注入 (仅索引 IB 自带包)。"
 fi
 
-# 倒回 index 的 mtime,确保 IB Makefile 第 220-236 行的"新于 index 就重跑"判定生效。
-# (cp -f 已经更新了被覆盖文件的 mtime,但新增包则不会改 index 文件本身。)
-for idx in packages.adb Packages Packages.gz Packages.sig packages.adb.sig; do
-    if [ -f "$WORKDIR/packages/$idx" ]; then
-        touch -d '1970-01-01' "$WORKDIR/packages/$idx" 2>/dev/null || true
-    fi
-done
+# 显式重建 package index。
+# 上游 IB tar 不含 packages.adb,且 `make manifest` 不强制依赖 package_index,
+# 所以必须在这里主动生成,否则 STANDALONE 模式下 apk 看到空仓 → 全部包 missing。
+# 即便没注入新包,IB 自带的 1000+ 个 .apk 也需要索引才能被 probe / make image 查到。
+echo "ib/prepare-repo: 重建 package index (make package_index)..."
+if ! ( cd "$WORKDIR" && make package_index >/tmp/ib-prepare-repo-index.log 2>&1 ); then
+    echo "::error::ib/prepare-repo: make package_index 失败" >&2
+    echo "::group::package_index log (tail 80)"
+    tail -80 /tmp/ib-prepare-repo-index.log >&2 || true
+    echo "::endgroup::"
+    exit 1
+fi
 
-echo "ib/prepare-repo: $copied 个 ipk/apk → $WORKDIR/packages/ (IB make image 时自动重 index)"
+if [ ! -f "$WORKDIR/packages/packages.adb" ]; then
+    echo "::error::ib/prepare-repo: 索引重建后仍无 packages.adb,IB STANDALONE 将查不到任何包" >&2
+    exit 1
+fi
+
+echo "ib/prepare-repo: $copied 个 ipk/apk → $WORKDIR/packages/, packages.adb 已重建"
