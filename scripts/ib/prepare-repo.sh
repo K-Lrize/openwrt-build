@@ -108,39 +108,70 @@ run_mkndx() {
         >"$mkndx_log" 2>&1
 }
 
-if ! run_mkndx; then
-    echo "::group::mkndx 第一次失败,完整输出"
+# 循环重试: mkndx 是 all-or-nothing,但它**只报第一批**遇到的坏文件就退出。
+# 实际坏包数量 > 第一批 stderr 报的数量是常见情况 (上游 25.12 过渡期):
+#   round 1: 报 cfdisk + colrm → 隔离
+#   round 2: 报 ca-certificates → 隔离
+#   round 3: 成功
+# 错误格式 (多种 reason):
+#   ERROR: cfdisk-2.42-r1.apk: file format is invalid or inconsistent
+#   ERROR: ca-certificates-...apk: ADB block error
+# 通用解析: `^ERROR: <name>.apk: <任何 reason>`,排除汇总行 "N errors, not creating index"
+max_rounds=8
+round=1
+isolated_all=""
+
+while :; do
+    if run_mkndx; then
+        break
+    fi
+
+    echo "::group::mkndx 第 $round 轮失败,完整输出"
     cat "$mkndx_log" >&2
     echo "::endgroup::"
 
-    # 解析格式: `ERROR: <basename>.apk: file format is invalid or inconsistent`
-    invalid=$(awk -F': ' '/^ERROR:.*\.apk: file format/ { print $2 }' "$mkndx_log" | sort -u)
-
-    if [ -z "$invalid" ]; then
-        echo "::error::ib/prepare-repo: mkndx 失败但无法从 stderr 解析 invalid 包名,见上方日志" >&2
+    if [ "$round" -ge "$max_rounds" ]; then
+        echo "::error::ib/prepare-repo: 重试 $max_rounds 轮仍失败,放弃 — 见上方日志" >&2
         exit 1
     fi
 
-    n_invalid=$(printf '%s\n' "$invalid" | wc -l | tr -d ' ')
-    echo "::warning::ib/prepare-repo: 上游 IB tar 含 $n_invalid 个无法被 apk mkndx 索引的 .apk,已隔离到 packages/.broken/"
+    invalid=$(awk -F': ' '
+        /^ERROR: .*\.apk: / && $0 !~ /errors, not creating index/ {
+            line = $0
+            sub(/^ERROR: /, "", line)
+            sub(/: .*$/, "", line)
+            print line
+        }' "$mkndx_log" | sort -u)
+
+    if [ -z "$invalid" ]; then
+        echo "::error::ib/prepare-repo: mkndx 失败但无法从 stderr 解析 invalid 包名 (第 $round 轮)" >&2
+        exit 1
+    fi
+
     mkdir -p "$WORKDIR/packages/.broken"
     while IFS= read -r f; do
         [ -n "$f" ] || continue
-        echo "::warning::ib/prepare-repo:   - $f (probe-missing 将报为 missing → fallback 重编)"
+        if [ ! -f "$WORKDIR/packages/$f" ]; then
+            echo "::error::ib/prepare-repo: 解析出的 invalid 文件 $f 不存在,解析逻辑可能有误" >&2
+            exit 1
+        fi
         mv "$WORKDIR/packages/$f" "$WORKDIR/packages/.broken/" || {
             echo "::error::ib/prepare-repo: 无法隔离 $f" >&2
             exit 1
         }
+        isolated_all+="$f"$'\n'
     done <<<"$invalid"
 
-    echo "ib/prepare-repo: 隔离完成,重新执行 mkndx..."
-    if ! run_mkndx; then
-        echo "::group::mkndx 第二次失败,完整输出"
-        cat "$mkndx_log" >&2
-        echo "::endgroup::"
-        echo "::error::ib/prepare-repo: 隔离 $n_invalid 个 invalid .apk 后 mkndx 仍失败 — 见上方日志" >&2
-        exit 1
-    fi
+    round=$((round + 1))
+done
+
+if [ -n "$isolated_all" ]; then
+    n_isolated=$(printf '%s' "$isolated_all" | grep -c .)
+    echo "::warning::ib/prepare-repo: 上游 IB tar 含 $n_isolated 个无法被 apk mkndx 索引的 .apk,已隔离到 packages/.broken/ (经过 $((round - 1)) 轮重试)"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        echo "::warning::ib/prepare-repo:   - $f"
+    done <<<"$isolated_all"
 fi
 
 if [ ! -f "$WORKDIR/packages/packages.adb" ]; then
