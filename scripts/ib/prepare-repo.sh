@@ -79,13 +79,35 @@ fi
 # 上游 IB tar 不含 packages.adb,且 `make manifest` 不强制依赖 package_index,
 # 所以必须在这里主动生成,否则 STANDALONE 模式下 apk 看到空仓 → 全部包 missing。
 # 即便没注入新包,IB 自带的 1000+ 个 .apk 也需要索引才能被 probe / make image 查到。
-echo "ib/prepare-repo: 重建 package index (make package_index)..."
-if ! ( cd "$WORKDIR" && make package_index >/tmp/ib-prepare-repo-index.log 2>&1 ); then
-    echo "::error::ib/prepare-repo: make package_index 失败" >&2
-    echo "::group::package_index log (tail 80)"
-    tail -80 /tmp/ib-prepare-repo-index.log >&2 || true
-    echo "::endgroup::"
-    exit 1
+#
+# 注意:上游 IB Makefile 的 package_index target 使用了 `>/dev/null 2>/dev/null || true`,
+# 会静默掩盖 apk mkndx 的失败。我们在这里绕过 make 直接调 apk 以暴露真错误。
+echo "ib/prepare-repo: 重建 package index..."
+
+# 1. 查找 apk 二进制。通常在 staging_dir/host/bin/apk
+APK_BIN="$WORKDIR/staging_dir/host/bin/apk"
+if [ ! -x "$APK_BIN" ]; then
+    # 兼容搜索 (部分环境路径可能不同)
+    APK_BIN=$(find "$WORKDIR" -name apk -type f -perm -111 2>/dev/null | head -n 1) || true
+fi
+
+if [ -x "$APK_BIN" ]; then
+    echo "ib/prepare-repo: 使用 $APK_BIN 绕过 Makefile 直接执行 mkndx..."
+    # mkndx 需要在 packages 目录下执行,索引当前目录下所有 *.apk
+    # --allow-untrusted 是因为 IB 自带包通常没签名或签名在 STANDALONE 下不好校验
+    if ! ( cd "$WORKDIR/packages" && "$APK_BIN" mkndx --allow-untrusted --output packages.adb *.apk ); then
+        echo "::error::ib/prepare-repo: apk mkndx 失败" >&2
+        exit 1
+    fi
+else
+    echo "ib/prepare-repo: 未找到可执行的 apk 二进制,退回到 make package_index (注意:错误可能被掩盖)..."
+    if ! ( cd "$WORKDIR" && make package_index >/tmp/ib-prepare-repo-index.log 2>&1 ); then
+        echo "::error::ib/prepare-repo: make package_index 失败" >&2
+        echo "::group::package_index log (tail 80)"
+        tail -80 /tmp/ib-prepare-repo-index.log >&2 || true
+        echo "::endgroup::"
+        exit 1
+    fi
 fi
 
 if [ ! -f "$WORKDIR/packages/packages.adb" ]; then
