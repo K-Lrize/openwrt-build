@@ -1,4 +1,4 @@
-name: "[Build] Pool — Package Pool Update"
+name: "[Build] Pool - Package Pool Update"
 
 # Pool 轨入口 — 独立的 Pool 增量重建, 不重建 SDK/IB:
 #   - 从 base-rolling 下载已有 SDK tar (不重复跑 buildroot)
