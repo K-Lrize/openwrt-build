@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # scripts/lib/pkg-filter.sh
 #
-# 包名清单清洗的唯一权威。所有「从 presets/*.list 或 missing JSON 出来的
-# 包名列表」入口都该走这里,避免 sed/grep 规则散落在多个脚本。
+# 包名清单清洗的唯一入口。所有「从 presets/*.list 或 missing JSON 出来的
+# 包名列表」清洗逻辑都该走这里,避免 sed/grep 规则散落在多个脚本。
 #
 # 用法 (source 后作为 bash 函数调用):
 #   source scripts/lib/pkg-filter.sh
@@ -21,7 +21,7 @@
 # kmod-policy:
 #   keep    保留 kmod-* 原样          (SDK 能编 kmod — Module.symvers + 预编 *.ko
 #                                      已经在 SDK tar 内,见上游 target/sdk/Makefile:81,113;
-#                                      Tier3 补编路径默认用这个,避免误剥)
+#                                      fallback 补编路径默认用这个,避免误剥)
 #   strip   静默剔除所有 kmod-*       (旧默认,保留作 fallback)
 #   warn    剔除并 stderr warning      (seed-config 等用户可见入口)
 #   error   发现 kmod-* 即 exit 1     (pool 清单守门,见 select-chunk)

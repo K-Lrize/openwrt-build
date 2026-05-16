@@ -2,7 +2,7 @@ name: "[Reusable] Firmware — Assemble image"
 
 # Reusable: 组装一台设备的固件 image。走 release tarball + host-native:
 #   gh release download IB tar + pool tar → tar -xf →
-#     ib/prepare-repo (合并 Tier2 pool + Tier3 补编 ipk 进 IB packages/) →
+#     ib/prepare-repo (合并 pool 包 + fallback 补编 ipk 进 IB packages/) →
 #     ib/make-image (IB make image PROFILE=... PACKAGES=...)
 
 on:
@@ -51,12 +51,12 @@ jobs:
             ca-certificates file gawk gettext git jq libncurses-dev \
             perl python3 rsync signify-openbsd unzip wget xz-utils zlib1g zstd
 
-      - name: Download Tier3 ipk artifact
+      - name: Download fallback ipk artifact
         uses: actions/download-artifact@v8
         continue-on-error: true
         with:
-          name: tier3-ipks-${{ inputs.arch }}
-          path: tier3-packages/
+          name: fallback-ipks-${{ inputs.arch }}
+          path: fallback-packages/
 
       - name: Download IB tar from base-rolling
         shell: bash
@@ -82,22 +82,22 @@ jobs:
           RELEASE_TAG:     ${{ inputs.pool_release_tag }}
         run: |
           set -e
-          mkdir -p tier2-packages
+          mkdir -p pool-packages
           if ! gh release download "$RELEASE_TAG" \
                  --repo "$GITHUB_REPOSITORY" \
                  --pattern "$POOL_TAR_NAME" \
                  --output "$POOL_TAR_NAME" 2>/dev/null; then
-            echo "::warning::Pool tar ${POOL_TAR_NAME} 未发布 (Tier2 按空处理)。"
+            echo "::warning::Pool tar ${POOL_TAR_NAME} 未发布 (按空处理)。"
           else
-            tar --use-compress-program=unzstd -xf "$POOL_TAR_NAME" -C tier2-packages
+            tar --use-compress-program=unzstd -xf "$POOL_TAR_NAME" -C pool-packages
           fi
 
-      - name: Merge Tier2 + Tier3 into unified package dir
+      - name: Merge pool + fallback into unified package dir
         shell: bash
         run: |
           set -e
           mkdir -p unified_repo
-          find tier2-packages/ tier3-packages/ -type f \( -name "*.ipk" -o -name "*.apk" \) \
+          find pool-packages/ fallback-packages/ -type f \( -name "*.ipk" -o -name "*.apk" \) \
             -exec cp -v {} unified_repo/ \; 2>/dev/null || true
           echo "unified_repo: $(find unified_repo -maxdepth 1 -type f | wc -l | tr -d ' ') 个 ipk/apk"
 

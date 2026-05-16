@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/ci/lint-presets.sh
 #
-# 静态校验 G2 套餐方案的配置一致性:
+# 静态校验 preset 套餐方案的配置一致性:
 #
 #   1. common/presets/*.list
 #      - 每行合法包名 / 整行 # 注释 / 空行
@@ -40,7 +40,7 @@ errors=0
 # 1. 校验 presets/*.list
 # ─────────────────────────────────────────────────────────────
 if [ ! -d "$PRESETS_DIR" ]; then
-    echo "::error::lint-presets: $PRESETS_DIR 不存在 (G2 套餐方案要求)"
+    echo "::error::lint-presets: $PRESETS_DIR 不存在 (preset 套餐方案要求, 见 ARCHITECTURE.md §3)"
     exit 1
 fi
 

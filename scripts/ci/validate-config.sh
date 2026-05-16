@@ -3,7 +3,7 @@
 #
 # 校验 defconfig 后的 .config 是否严格保留了"种子要求内置 (=y)"的包。
 #
-# 种子来源 (G2 套餐方案后):
+# 种子来源 (三段拼装):
 #   1. devices/<dev>/target.conf  → CONFIG_TARGET_*=y 必须保留
 #   2. common/base-config         → CONFIG_PACKAGE_<pkg>=y 必须保留 (=m 不强制)
 #   3. devices/<dev>/packages.list → @preset 展开后 +pkg 必须 =y

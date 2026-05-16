@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/ib/prepare-repo.sh
 #
-# 把外部 ipk/apk(Tier2 pool + Tier3 补编)注入已解压的 ImageBuilder workdir。
+# 把外部 ipk/apk (pool 包 + fallback 补编) 注入已解压的 ImageBuilder workdir。
 #
 # 现代 OpenWrt IB (2024-12 切到 APK 之后,且 _base-target.yml 用 CONFIG_IB_STANDALONE=y)
 # 顶层不再有 repositories.conf / repositories 文件 — IB Makefile 的 APK 命令是:
@@ -23,7 +23,7 @@
 # 用法:
 #   ib/prepare-repo.sh \
 #       --workdir <IB_ROOT>          必填,已解压的 IB 根
-#       --packages-dir <DIR>         必填,tier2 + tier3 合并后的 ipk/apk 目录 (扁平)
+#       --packages-dir <DIR>         必填,pool + fallback 合并后的 ipk/apk 目录 (扁平)
 
 set -euo pipefail
 

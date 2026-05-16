@@ -5,7 +5,7 @@
 # 不修改文件、不依赖工作目录。
 #
 # 兼容两种格式：
-#   - 种子格式（devices/<dev>/target.conf, G2 套餐方案后）：
+#   - 种子格式（devices/<dev>/target.conf）：
 #       # arch: <arch_packages>          (顶部注释, 架构不变量 #6)
 #       CONFIG_TARGET_<main>=y
 #       CONFIG_TARGET_<main>_<sub>=y
@@ -21,7 +21,7 @@
 #   target=$(extract_target devices/mt3600be/target.conf)
 #   profile=$(extract_profile devices/mt3600be/target.conf)
 #   arch=$(extract_arch devices/mt3600be/target.conf)
-# G2 套餐方案后包清单走 scripts/lib/expand-packages.sh, 不再用 extract_packages。
+# 设备级包清单走 scripts/lib/expand-packages.sh 解析 packages.list, 不再用 extract_packages。
 
 # 已废弃 (新代码用 scripts/lib/expand-packages.sh): 从 defconfig 后的 .config 读
 # CONFIG_PACKAGE_xxx=y/=m → 输出 'xxx' (IB make image PACKAGES= 喂值),
@@ -89,7 +89,7 @@ extract_profile() {
 
 # 输出 architecture（用于 ipk 命名/cache key），例如 "aarch64_cortex-a53"。
 #
-# 推导规则 (G2 套餐方案后只一种):
+# 推导规则:
 #   - 优先读 defconfig 后格式 CONFIG_TARGET_ARCH_PACKAGES="<arch>" (buildroot 完成后才有)
 #   - 否则读 target.conf / .config 顶部 `# arch: <name>` 注释 (架构不变量 #6)
 #

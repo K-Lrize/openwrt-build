@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # scripts/ci/select-chunk.sh
 #
-# 从 common/presets/*.list (G2 套餐) union 后,取第 <chunk_id>/<total> 片包名,
+# 从 common/presets/*.list union 后,取第 <chunk_id>/<total> 片包名,
 # 输出到文件。Pool 工作流 (_pool-build.yml) 用,GHA runner 顶层执行 (不依赖 SDK)。
 #
-# 信息源 (架构不变量 #5):
-#   common/presets/*.list 是 pool 编什么的唯一来源。
+# 唯一信息源 (架构不变量 #5):
+#   common/presets/*.list 是 pool 编什么的唯一信息源, pool 工作流不读其他文件。
 #   下划线开头的 preset (如 _extras.list) 也被 union — 游离包同样要编。
 #
 # kmod 守门: preset 里出现 kmod-* 视为配置错,exit 1。kmod 必须在

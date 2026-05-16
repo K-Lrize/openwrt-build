@@ -2,7 +2,7 @@
 # scripts/sdk/compile.sh
 #
 # 在「已 prepare 过的 SDK workdir」里跑配置式批量编译。
-# Pool 轨 (大规模配方编译) 与 Firmware 轨 Tier3 (兜底补编) 两条线共用,
+# Pool 轨 (大规模 preset 套餐编译) 与 Firmware 轨 fallback (兜底补编) 两条线共用,
 # 差异只通过 --seed-config / --strict 等参数体现。
 #
 # 用法:
@@ -10,7 +10,7 @@
 #       --workdir <SDK_ROOT>          已解压且已 prepare 完毕的 SDK 根
 #       --packages <FILE>             已清洗的包清单,一行一包
 #       --out <DIR>                   产物输出根 (packages/ logs/ .reports/)
-#       [--seed-config <FILE>]        覆盖 SDK 自带 .config (tier3 用 combined.config)
+#       [--seed-config <FILE>]        覆盖 SDK 自带 .config (fallback 路径用 combined.config)
 #       [--jobs N]                    默认 nproc;Mac 上自动退回 sysctl 检测
 #       [--strict]                    defconfig 后包名缺失 → exit 1
 #       [--no-retry]                  关闭 -jN 失败自动 -j1 V=s 重试

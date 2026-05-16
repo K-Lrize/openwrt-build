@@ -2,7 +2,7 @@ name: "[Build] Pool — Package Pool Update"
 
 # Pool 轨入口 — 独立的 Pool 增量重建, 不重建 SDK/IB:
 #   - 从 base-rolling 下载已有 SDK tar (不重复跑 buildroot)
-#   - checkout 当前分支最新 common/presets/*.list (G2 套餐方案)
+#   - checkout 当前分支最新 common/presets/*.list (pool 编什么的唯一信息源)
 #   - 4-chunk 并发跑 sdk/compile, 然后聚合成 per-arch tarball 推 pool-rolling
 #   - 失败不染红 base.yml (物理分两个 run); 本工作流自身允许红, 便于关注修复进度
 #

@@ -1,11 +1,12 @@
-# GL-MT3600BE 包清单 — G2 套餐方案
+# GL-MT3600BE 包清单
 #
 # 语法:
 #   @preset <name>   引用 common/presets/<name>.list 全部包
-#   +<pkg>           装这个包 (套餐外个性加)
+#   +<pkg>           装这个包 (preset 外个性加)
 #   -<pkg>           从 IB DEFAULT_PACKAGES 排除 (避免 multi-variant 冲突)
+# 完整语法说明见 ARCHITECTURE.md §4。
 
-# ---- 套餐 ----
+# ---- preset 套餐 ----
 @preset core
 @preset network
 @preset ipv6

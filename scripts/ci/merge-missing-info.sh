@@ -45,7 +45,7 @@ for arch in "${!arch_packages[@]}"; do
     [ "$(echo "$unique_packages" | jq 'length')" -gt 0 ] || continue
 
     # 该 arch 下任选一个 device,把它的 sdk_tar_name / ib_tar_name 当作"代表"
-    # (Tier3 只用 SDK 跑 make package/compile,per-target 的 SDK tarball 对该 arch 一致)
+    # (fallback 补编只用 SDK 跑 make package/compile,per-target 的 SDK tarball 对该 arch 一致)
     rep=$(echo "$DEVICE_META" | jq -c --arg arch "$arch" \
         'to_entries | map(select(.value.arch == $arch)) | .[0].value')
 

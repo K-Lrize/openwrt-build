@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # scripts/ib/make-image.sh
 #
-# 在「已 prepare-repo 的 ImageBuilder workdir」内组装一台设备的固件镜像。
-# 取代旧 _firmware-image.yml:111-119 在 docker IB 容器内的逻辑。
+# 在「已 prepare-repo 的 ImageBuilder workdir」内组装一台设备的固件。
+# 直接 host-native 跑 IB make image, 不需要 docker。
 #
 # 用法:
 #   ib/make-image.sh \

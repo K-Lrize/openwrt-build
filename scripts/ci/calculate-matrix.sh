@@ -147,7 +147,7 @@ for dev in "${BUILD_LIST[@]}"; do
     cfg="devices/${dev}/target.conf"
 
     if [ ! -f "$cfg" ]; then
-        echo "::error::device ${dev}: 缺 $cfg (G2 套餐方案要求)。"
+        echo "::error::device ${dev}: 缺 $cfg (架构不变量 #6, 见 ARCHITECTURE.md)。"
         exit 1
     fi
 

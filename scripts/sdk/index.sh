@@ -2,10 +2,8 @@
 # scripts/sdk/index.sh
 #
 # 为一个含 ipk/apk 的目录树生成 OpenWrt 标准的 Packages.gz / APKINDEX.tar.gz
-# 索引文件。Pool finalize 与本地 IB feed 拼装都复用此脚本。
-#
-# 取代旧 scripts/ci/finalize-pool.sh:51-62 在 SDK 容器内跑的 docker run 段。
-# 用 host 上已解压的 SDK 借 ipkg-make-index.sh 与 apk 二进制即可,无需 docker。
+# 索引文件。Pool finalize 阶段调用,host-native (借 SDK 自带的 ipkg-make-index.sh
+# + 系统 apk 命令), 不需要 docker。
 #
 # 用法:
 #   sdk/index.sh \

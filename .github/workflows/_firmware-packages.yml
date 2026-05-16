@@ -1,6 +1,6 @@
-name: "[Reusable] Firmware — Tier3 SDK fallback compile"
+name: "[Reusable] Firmware — SDK fallback compile"
 
-# Reusable: per-arch Tier3 增量编译。接收一组 missing 包名 (由 Aggregate-Missing 算出)
+# Reusable: per-arch 兜底补编。接收一组 missing 包名 (由 Aggregate-Missing 算出)
 # 与 SDK tar asset 名, 走 base-rolling tarball + host-native 编译, 产出 ipk artifact
 # 供 _firmware-image.yml 注入 IB packages/。
 #
@@ -30,7 +30,7 @@ permissions:
   contents: read
 
 jobs:
-  Compile-Tier3-Patches:
+  Compile-Fallback-Patches:
     name: Compile missing packages (${{ inputs.arch }})
     runs-on: ubuntu-24.04
     steps:
@@ -71,7 +71,7 @@ jobs:
           set -e
           jq -r '.[]' <<< "$PACKAGES" > missing.txt
 
-          # Tier3 SDK 单包编时需要 seed .config 保留所有设备的 target select 行,
+          # 兜底补编单包时需要 seed .config 保留所有设备的 target select 行,
           # 避免 SDK defconfig 报缺设备级 CONFIG_TARGET_*。
           : > combined.config
           find build-config/devices/ -name "target.conf" -exec cat {} + >> combined.config
@@ -102,13 +102,13 @@ jobs:
         env:
           ARCH: ${{ inputs.arch }}
         run: |
-          mkdir -p tier3-outputs
+          mkdir -p fallback-outputs
           find "pkg-out/packages/${ARCH}" -type f \( -name '*.ipk' -o -name '*.apk' \) \
-            -exec cp -v {} tier3-outputs/ \; 2>/dev/null || true
+            -exec cp -v {} fallback-outputs/ \; 2>/dev/null || true
 
-      - name: Upload Tier3 artifact
+      - name: Upload fallback ipk artifact
         uses: actions/upload-artifact@v7
         with:
-          name: tier3-ipks-${{ inputs.arch }}
-          path: tier3-outputs/
+          name: fallback-ipks-${{ inputs.arch }}
+          path: fallback-outputs/
           retention-days: 1

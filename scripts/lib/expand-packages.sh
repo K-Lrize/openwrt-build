@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/lib/expand-packages.sh
 #
-# G2 套餐方案的 packages.list 解析器。devices/<dev>/packages.list 的语法:
+# preset 套餐方案的 packages.list 解析器。devices/<dev>/packages.list 的语法:
 #
 #   @preset <name>     展开为 common/presets/<name>.list 的所有包 (前缀视为 +)
 #                      <name> 可以下划线开头 (如 @preset _extras 显式引用游离池)

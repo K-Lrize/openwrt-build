@@ -1,12 +1,13 @@
 name: "[Reusable] Base — SDK + IB per target"
 
-# Reusable: 对单个 target (mediatek/filogic 之类) 跑完整 buildroot, 产出推 release 的
-# 三件套:
+# Reusable: 对单个 target (mediatek/filogic 之类) 跑完整 buildroot, 产出推 release
+# 的三件套:
 #   1. SDK tarball     — 内嵌 base-packages/, 供 pool/firmware-packages 阶段
 #                        sdk/prepare 自动注入 src-link
 #   2. IB tarball      — 供 firmware-image 阶段本地 tar -x 后直接 make image
-#   3. IB manifest     — 已编内置 ipk 的扁平包名清单 (人读用; 自动诊断走
-#                        ib/probe-missing.sh make manifest dry-run)
+#   3. IB manifest     — IB tar 内已编 ipk 的扁平包名清单, 给人读用
+#                        ("IB tar 里到底有什么"); 自动诊断走 ib/probe-missing.sh
+#                        make manifest dry-run, 不读这个 manifest sidecar
 #
 # 文件命名集中在 scripts/lib/asset-names.sh。
 

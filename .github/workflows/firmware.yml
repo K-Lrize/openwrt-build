@@ -4,8 +4,8 @@ name: "[Build] Firmware — Incremental"
 #   1. Probe-Missing  下载 IB + pool tar, make manifest dry-run 探依赖闭包,
 #                     算出 missing 包名 + conflict 警告
 #   2. Aggregate      把各设备的 missing 按 arch 聚合
-#   3. Build-Patches  per arch 跑 Tier3 SDK 补编 (正常路径=空, ~99% 时间 skip)
-#   4. Assemble-Image per device IB 装 (pool + tier3 + files) 出固件
+#   3. Compile-Fallback per arch 跑 SDK 兜底补编 (正常路径=空, ~99% 时间 skip)
+#   4. Assemble-Firmware per device IB 装 (pool + fallback + files) 出固件
 #   5. Publish        汇总 firmware-* artifact 推 firmware-rolling
 #
 # 触发:
@@ -110,7 +110,7 @@ jobs:
           tar --use-compress-program=unzstd -xf "$IB_TAR_NAME" \
               -C ib-work --strip-components=1
 
-      - name: Download pool tar from pool-rolling (Tier2)
+      - name: Download pool tar from pool-rolling
         shell: bash
         env:
           GH_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
@@ -118,24 +118,24 @@ jobs:
           RELEASE_TAG:     ${{ env.POOL_RELEASE_TAG }}
         run: |
           set -e
-          mkdir -p tier2-packages
+          mkdir -p pool-packages
           if ! gh release download "$RELEASE_TAG" \
                  --repo "$GITHUB_REPOSITORY" \
                  --pattern "$POOL_TAR_NAME" \
                  --output "$POOL_TAR_NAME" 2>/dev/null; then
             echo "::warning::Pool tar ${POOL_TAR_NAME} 未发布, probe 仅基于 IB 自带 packages。"
           else
-            tar --use-compress-program=unzstd -xf "$POOL_TAR_NAME" -C tier2-packages
+            tar --use-compress-program=unzstd -xf "$POOL_TAR_NAME" -C pool-packages
           fi
 
-      - name: Inject Tier2 into IB packages/ (ib/prepare-repo.sh)
+      - name: Inject pool packages into IB (ib/prepare-repo.sh)
         shell: bash
         run: |
           # probe 阶段 "已可用" 集合 = IB 自带 + pool。
-          # 不注入的话 pool 已编的包会被算成 missing, Tier3 重复编。
+          # 不注入的话 pool 已编的包会被算成 missing, 走到 Compile-Fallback 重复编。
           bash build-config/scripts/ib/prepare-repo.sh \
             --workdir ib-work \
-            --packages-dir tier2-packages
+            --packages-dir pool-packages
 
       - name: Probe via make manifest (ib/probe-missing.sh)
         shell: bash
@@ -195,8 +195,8 @@ jobs:
             all-missing \
             '${{ needs.Initialize.outputs.device_meta }}'
 
-  Compile-Tier3:
-    name: Tier3 SDK fallback compile (per arch)
+  Compile-Fallback:
+    name: SDK fallback compile (per arch)
     needs: [Initialize, Aggregate-Missing]
     if: needs.Aggregate-Missing.outputs.arch_packages_matrix != '[]'
     strategy:
@@ -212,7 +212,7 @@ jobs:
 
   Assemble-Firmware:
     name: Assemble firmware image (per device)
-    needs: [Initialize, Compile-Tier3]
+    needs: [Initialize, Compile-Fallback]
     if: always() && needs.Initialize.outputs.has_builds == 'true'
     strategy:
       fail-fast: false

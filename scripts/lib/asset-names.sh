@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/lib/asset-names.sh
 #
-# 集中所有 release asset 的命名规则。取代旧 lib/image-tags.sh (GHCR tag 算法)。
+# 集中所有 release asset 的命名规则 (架构不变量 #9, 见 ARCHITECTURE.md)。
 # 改 asset 命名只需要改这一处。
 #
 # 依赖:scripts/lib/slugify.sh (slugify + source_slug)
@@ -26,11 +26,11 @@
 #   - IB manifest:   ib-<target_slug>-<source_slug>.manifest.txt
 #   - Pool tar:      pool-<arch_slug>-<source_slug>.tar.zst (按 arch 切分)
 #   - Pool manifest: pool-<source_slug>.manifest.txt (跨 arch 去重)
-#   - <source_slug>  = <repo_slug>-<ref_slug>,sloppy-fork 隔离
+#   - <source_slug>  = <repo_slug>-<ref_slug>, 避免不同 fork 的同分支名撞 tag
 #
 # 双层接口:
-#   *_name(target/arch, repo, ref)     — 高层,接受原始 repo+ref,内部算 source_slug
-#   *_name_with_slug(target/arch, slug)  — 低层,接受已算好的 source_slug;
+#   *_name(target/arch, repo, ref)     — 高层, 接受原始 repo+ref, 内部算 source_slug
+#   *_name_with_slug(target/arch, slug)  — 低层, 接受已算好的 source_slug;
 #                                          用于已持有 source_slug 的上下文 (如
 #                                          _pool-finalize.yml 通过 input 拿到 slug)
 
