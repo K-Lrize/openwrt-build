@@ -240,7 +240,16 @@ jobs:
 
           APK="$SDK/staging_dir/host/bin/apk"
           [ -x "$APK" ] || { echo "::error::$APK not found (SDK incomplete?)"; exit 1; }
-          (cd "$OUT" && "$APK" mkndx -o packages.adb ./*.apk)
+
+          # SDK 编出的 .apk 都用 SDK 的 build key 签名 (key-build.private).
+          # `apk mkndx` 校验签名时若找不到对应公钥就报 UNTRUSTED signature.
+          # 用 --allow-untrusted 跳过 — IB 装包时不受影响, IB tar 内置 SDK 同源
+          # build key 公钥 (上游同次 CI 出品), apk add 时校验通过.
+          echo "--- 诊断: SDK 内 build key 位置 (供后续走 --keys-dir 路径参考) ---"
+          find "$SDK" -maxdepth 6 \
+            \( -name 'key-build*' -o -path '*/apk/keys/*' \) 2>/dev/null | head -20 || true
+
+          (cd "$OUT" && "$APK" mkndx --allow-untrusted -o packages.adb ./*.apk)
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
 
       - name: Add local repo to IB repositories (prepend, 同名包优先)
