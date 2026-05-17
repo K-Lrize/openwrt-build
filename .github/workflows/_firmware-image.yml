@@ -258,7 +258,8 @@ jobs:
         run: |
           bash build-config/scripts/build/add-repo.sh \
             --ib-workdir '${{ steps.fetch_ib.outputs.ib_root }}' \
-            --local-feed '${{ steps.self_feed.outputs.out }}'
+            --local-feed '${{ steps.self_feed.outputs.out }}' \
+            --sdk-dir    '${{ steps.fetch_sdk.outputs.sdk_root }}'
 
       - name: Probe missing packages (sanity check)
         shell: bash
