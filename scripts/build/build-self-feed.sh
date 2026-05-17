@@ -60,14 +60,22 @@ printf "  - %s\n" "${PKGS[@]}"
 echo "::endgroup::"
 
 # 在 SDK 内追加 src-link 行 (幂等)
+# 关键: 保留 SDK 默认 feeds.conf (含 packages/base/luci/routing 等上游标准 feed),
+# 在末尾加 local_self. 上游 feed 是自维护包的 build deps 来源:
+#   sing-box 需要 packages feed 的 lang/golang/golang-package.mk + golang/host
+#   sing-box 需要 base feed 的 ca-bundle 包定义
+# 只装 local_self → 上游 deps 找不到 → "please fix Makefile" 报错.
 SDK_FEEDS_CONF="$SDK/feeds.conf"
 [ ! -f "$SDK_FEEDS_CONF" ] && cp -f "$SDK/feeds.conf.default" "$SDK_FEEDS_CONF"
 grep -vE "^src-link[[:space:]]+local_self[[:space:]]" "$SDK_FEEDS_CONF" > "$SDK_FEEDS_CONF.tmp" || true
 echo "src-link local_self $FEEDS_LOCAL_DIR" >> "$SDK_FEEDS_CONF.tmp"
 mv "$SDK_FEEDS_CONF.tmp" "$SDK_FEEDS_CONF"
 
-echo "::group::build-self-feed: scripts/feeds update + install"
-(cd "$SDK" && ./scripts/feeds update local_self && ./scripts/feeds install -a -p local_self)
+echo "::group::build-self-feed: scripts/feeds update + install (all feeds)"
+# update -a / install -a: 所有 feed (标准 + local_self) 都装. install -a 只创建
+# package/ 下的符号链接 (让 deps 可解析), 不会让所有包都编 — 我们的 .config
+# 只有 CONFIG_PACKAGE_<我们的包>=m, 实际编译列表由它决定.
+(cd "$SDK" && ./scripts/feeds update -a && ./scripts/feeds install -a)
 echo "::endgroup::"
 
 echo "::group::build-self-feed: compose .config"
