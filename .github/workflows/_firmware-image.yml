@@ -249,7 +249,15 @@ jobs:
           find "$SDK" -maxdepth 6 \
             \( -name 'key-build*' -o -path '*/apk/keys/*' \) 2>/dev/null | head -20 || true
 
-          (cd "$OUT" && "$APK" mkndx --allow-untrusted -o packages.adb ./*.apk)
+          # 尝试使用 SDK 的私钥对索引进行签名, 增加受信任概率
+          PRIV_KEY=$(find "$SDK" -maxdepth 1 -name "key-build" | head -n 1)
+          if [ -n "$PRIV_KEY" ]; then
+            echo "Using private key to sign index: $PRIV_KEY"
+            (cd "$OUT" && "$APK" mkndx --sign-key "$PRIV_KEY" -o packages.adb ./*.apk)
+          else
+            echo "No private key found in SDK root, using --allow-untrusted"
+            (cd "$OUT" && "$APK" mkndx --allow-untrusted -o packages.adb ./*.apk)
+          fi
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
 
       - name: Add local repo to IB repositories (prepend, 同名包优先)

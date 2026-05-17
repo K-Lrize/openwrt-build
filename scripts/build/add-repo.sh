@@ -2,7 +2,7 @@
 # scripts/build/add-repo.sh
 #
 # 把本地 apk 源 **prepend 到 IB repositories 头部**. 关键: 不是 append.
-# 同时从 SDK 拷贝 build key 到 IB, 解决 UNTRUSTED signature 问题.
+# 同时从 SDK 拷贝 build key 到 IB 和宿主环境, 解决 UNTRUSTED signature 问题.
 #
 # 用法:
 #   build/add-repo.sh --ib-workdir <IB_ROOT> --local-feed <DIR> [--sdk-dir <SDK_ROOT>]
@@ -38,21 +38,35 @@ REPO="$WORKDIR/repositories"
 # 1. 拷贝公钥 (如果有 SDK_DIR)
 if [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR" ]; then
     echo "add-repo: 尝试从 SDK 同步 build key..."
-    # 公钥通常在 SDK 根目录叫 key-build.pub, 或者在 etc/apk/keys/ 下
-    # 我们把它们都拷进 IB 的 key 目录
-    IB_KEYS="$WORKDIR/etc/apk/keys"
-    mkdir -p "$IB_KEYS"
+    # 查找公钥
+    PUB_KEY=$(find "$SDK_DIR" -maxdepth 2 -name "key-build.pub" | head -n 1)
+    if [ -z "$PUB_KEY" ]; then
+        PUB_KEY=$(find "$SDK_DIR" -path "*/etc/apk/keys/*.pub" | head -n 1)
+    fi
 
-    # 查找并拷贝 .pub 结尾的 key
-    find "$SDK_DIR" -maxdepth 2 -name "key-build.pub" -exec cp -v {} "$IB_KEYS/" \;
-    find "$SDK_DIR" -path "*/etc/apk/keys/*.pub" -exec cp -v {} "$IB_KEYS/" \;
+    if [ -n "$PUB_KEY" ]; then
+        echo "add-repo: 找到公钥: $PUB_KEY"
+        
+        # A. 拷贝到 IB 内部路径 (供 IB 内部 make 逻辑使用)
+        # 支持多种可能的 IB key 路径
+        TARGET_DIRS=(
+            "$WORKDIR/etc/apk/keys"
+            "$WORKDIR/staging_dir/host/etc/apk/keys"
+        )
+        for d in "${TARGET_DIRS[@]}"; do
+            mkdir -p "$d"
+            cp -v "$PUB_KEY" "$d/"
+        done
 
-    # 如果 IB 是在 docker 里跑或者 apk 指向宿主, 
-    # 有些版本的 IB 还会读 staging_dir/host/etc/apk/keys
-    IB_HOST_KEYS="$WORKDIR/staging_dir/host/etc/apk/keys"
-    if [ -d "$(dirname "$IB_HOST_KEYS")" ]; then
-        mkdir -p "$IB_HOST_KEYS"
-        cp -v "$IB_KEYS"/*.pub "$IB_HOST_KEYS/" 2>/dev/null || true
+        # B. 拷贝到宿主系统路径 (最重要: 供 runner 环境下的 apk 直接读)
+        # GitHub Runner 允许免密 sudo
+        if command -v sudo >/dev/null; then
+            echo "add-repo: 注入宿主系统信任目录 /etc/apk/keys/ ..."
+            sudo mkdir -p /etc/apk/keys/
+            sudo cp -v "$PUB_KEY" /etc/apk/keys/
+        fi
+    else
+        echo "::warning::add-repo: 未在 SDK 目录中找到公钥 (*.pub), UNTRUSTED 风险依然存在"
     fi
 fi
 
