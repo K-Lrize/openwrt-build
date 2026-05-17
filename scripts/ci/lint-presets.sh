@@ -12,6 +12,9 @@
 #
 #   2. devices/*/target.conf
 #      - 顶部必须有 `# arch: <name>` (架构不变量 #6)
+#      - 顶部必须有 `# ib-url: <https://...tar.{zst,xz,gz}>`
+#      - 顶部必须有 `# sdk-url: <https://...tar.{zst,xz,gz}>`
+#        (URL 可以是上游 downloads.openwrt.org / 自建 gh release / 任意 HTTPS)
 #      - 必须有 CONFIG_TARGET_<board>=y / _<sub>=y / _DEVICE_<profile>=y
 #
 #   3. devices/*/packages.list
@@ -30,6 +33,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONF_DIR="${1:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 CONF_DIR="$(cd "$CONF_DIR" && pwd)"
+
+# 简单的 HTTPS tar URL 校验 (允许 .tar.zst / .tar.xz / .tar.gz)
+_is_valid_tar_url() {
+    [[ "$1" =~ ^https?://.+\.tar\.(zst|xz|gz)$ ]]
+}
 
 PRESETS_DIR="$CONF_DIR/common/presets"
 DEVICES_DIR="$CONF_DIR/devices"
@@ -119,6 +127,26 @@ else
         else
             if ! grep -qE '^#[[:space:]]*arch:[[:space:]]+' "$target_conf"; then
                 echo "::error file=devices/${dev}/target.conf::缺顶部 '# arch: <name>' 注释 (架构不变量 #6)"
+                errors=$((errors + 1))
+            fi
+            # # ib-url: 必填
+            ib_url=$(grep -E '^#[[:space:]]*ib-url:[[:space:]]+' "$target_conf" \
+                      | head -1 | sed -E 's/^#[[:space:]]*ib-url:[[:space:]]+//' | awk '{print $1}') || true
+            if [ -z "$ib_url" ]; then
+                echo "::error file=devices/${dev}/target.conf::缺 '# ib-url: <https://....tar.{zst,xz,gz}>' (IB tar 下载来源)"
+                errors=$((errors + 1))
+            elif ! _is_valid_tar_url "$ib_url"; then
+                echo "::error file=devices/${dev}/target.conf::非法 # ib-url '${ib_url}' (须 HTTPS 且以 .tar.{zst,xz,gz} 结尾)"
+                errors=$((errors + 1))
+            fi
+            # # sdk-url: 必填 (即使 feeds/local 为空也写, 防忘)
+            sdk_url=$(grep -E '^#[[:space:]]*sdk-url:[[:space:]]+' "$target_conf" \
+                       | head -1 | sed -E 's/^#[[:space:]]*sdk-url:[[:space:]]+//' | awk '{print $1}') || true
+            if [ -z "$sdk_url" ]; then
+                echo "::error file=devices/${dev}/target.conf::缺 '# sdk-url: <https://....tar.{zst,xz,gz}>' (SDK tar 下载来源)"
+                errors=$((errors + 1))
+            elif ! _is_valid_tar_url "$sdk_url"; then
+                echo "::error file=devices/${dev}/target.conf::非法 # sdk-url '${sdk_url}' (须 HTTPS 且以 .tar.{zst,xz,gz} 结尾)"
                 errors=$((errors + 1))
             fi
             if ! grep -qE '^CONFIG_TARGET_[a-zA-Z0-9]+=y$' "$target_conf"; then

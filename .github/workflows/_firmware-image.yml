@@ -1,151 +1,190 @@
 name: "[Reusable] Firmware — Assemble image"
 
-# Reusable: 组装一台设备的固件 image。走 release tarball + host-native:
-#   gh release download IB tar + pool tar → tar -xf →
-#     ib/prepare-repo (合并 pool 包 + fallback 补编 ipk 进 IB packages/) →
-#     ib/make-image (IB make image PROFILE=... PACKAGES=...)
+# 组装一台设备的固件 image.
+# 流程:
+#   1. 读 device target.conf 拿 ib-url + sdk-url (workflow_dispatch 可覆盖)
+#   2. build/fetch.sh 拉 IB tar + 解压
+#   3. (如 feeds/local 非空) build/fetch.sh 拉 SDK + build/build-self-feed.sh 编自有包
+#   4. build/append-repo.sh 把 file:// 自有 feed 追加到 IB repositories
+#   5. probe-missing sanity check (missing > 0 → 红)
+#   6. expand_packages_for_ib → IB PACKAGES=
+#   7. merge files (common/ + devices/<dev>/) → ./files
+#   8. run image scripts (common/ + devices/<dev>/)
+#   9. make image PROFILE=... PACKAGES=... FILES=./files
+#  10. 收 image + sha256
 
 on:
   workflow_call:
     inputs:
       device:
+        description: 'Device ID (devices/<dev>/)'
         type: string
         required: true
-      arch:
+      ib_url:
+        description: 'IB tar URL 覆盖 (空 → 用 device 注释)'
         type: string
-        required: true
-      ib_tar_name:
-        description: 'IB tarball asset 名 (从 device_meta.ib_tar_name 取)'
+        default: ''
+      sdk_url:
+        description: 'SDK tar URL 覆盖 (空 → 用 device 注释)'
         type: string
-        required: true
-      pool_tar_name:
-        description: 'Pool tarball asset 名 (从 device_meta.pool_tar_name 取)'
-        type: string
-        required: true
-      base_release_tag:
-        description: '从哪个 release 下载 IB tar (Base 层)'
-        type: string
-        default: 'base-rolling'
-      pool_release_tag:
-        description: '从哪个 release 下载 pool tar (Pool 层)'
-        type: string
-        default: 'pool-rolling'
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
-  Assemble-Firmware:
-    name: Assemble image (${{ inputs.device }})
+  Assemble:
+    name: Assemble (${{ inputs.device }})
     runs-on: ubuntu-24.04
+    env:
+      DEVICE: ${{ inputs.device }}
+      IB_URL_OVERRIDE:  ${{ inputs.ib_url }}
+      SDK_URL_OVERRIDE: ${{ inputs.sdk_url }}
     steps:
       - name: Checkout build-config
         uses: actions/checkout@v6
         with:
           path: build-config
 
-      - name: Install IB host deps
+      - name: Install host deps
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
             ca-certificates file gawk gettext git jq libncurses-dev \
             perl python3 rsync signify-openbsd unzip wget xz-utils zlib1g zstd
 
-      - name: Download fallback ipk artifact
-        uses: actions/download-artifact@v8
-        continue-on-error: true
-        with:
-          name: fallback-ipks-${{ inputs.arch }}
-          path: fallback-packages/
-
-      - name: Download IB tar from base-rolling
+      - name: Resolve URLs from device target.conf
+        id: urls
         shell: bash
-        env:
-          GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
-          IB_TAR_NAME:  ${{ inputs.ib_tar_name }}
-          RELEASE_TAG:  ${{ inputs.base_release_tag }}
         run: |
-          set -e
-          gh release download "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "$IB_TAR_NAME" \
-            --output "$IB_TAR_NAME"
-          mkdir -p ib-work
-          tar --use-compress-program=unzstd -xf "$IB_TAR_NAME" \
-              -C ib-work --strip-components=1
+          set -euo pipefail
+          source build-config/scripts/lib/extract-config.sh
 
-      - name: Download pool tar from pool-rolling
+          DEV_CONF="build-config/devices/${DEVICE}/target.conf"
+          [ -f "$DEV_CONF" ] || { echo "::error::$DEV_CONF 不存在"; exit 1; }
+
+          IB_URL="${IB_URL_OVERRIDE:-$(extract_ib_url "$DEV_CONF")}"
+          SDK_URL="${SDK_URL_OVERRIDE:-$(extract_sdk_url "$DEV_CONF")}"
+
+          [ -n "$IB_URL"  ] || { echo "::error::${DEVICE}: 无 ib-url (device 注释缺失且无 workflow input)"; exit 1; }
+          [ -n "$SDK_URL" ] || { echo "::error::${DEVICE}: 无 sdk-url"; exit 1; }
+
+          echo "ib_url=$IB_URL"   >> "$GITHUB_OUTPUT"
+          echo "sdk_url=$SDK_URL" >> "$GITHUB_OUTPUT"
+          echo "Resolved:"
+          echo "  IB:  $IB_URL"
+          echo "  SDK: $SDK_URL"
+
+      - name: Fetch IB
+        id: fetch_ib
         shell: bash
-        env:
-          GH_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
-          POOL_TAR_NAME:   ${{ inputs.pool_tar_name }}
-          RELEASE_TAG:     ${{ inputs.pool_release_tag }}
         run: |
-          set -e
-          mkdir -p pool-packages
-          if ! gh release download "$RELEASE_TAG" \
-                 --repo "$GITHUB_REPOSITORY" \
-                 --pattern "$POOL_TAR_NAME" \
-                 --output "$POOL_TAR_NAME" 2>/dev/null; then
-            echo "::warning::Pool tar ${POOL_TAR_NAME} 未发布 (按空处理)。"
-          else
-            tar --use-compress-program=unzstd -xf "$POOL_TAR_NAME" -C pool-packages
+          set -euo pipefail
+          mkdir -p ib-stage
+          IB_ROOT=$(bash build-config/scripts/build/fetch.sh \
+                      --url '${{ steps.urls.outputs.ib_url }}' \
+                      --out ib-stage)
+          echo "ib_root=$IB_ROOT" >> "$GITHUB_OUTPUT"
+          echo "IB root: $IB_ROOT"
+
+      - name: Fetch SDK (only if feeds/local non-empty)
+        id: fetch_sdk
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$(ls -A build-config/feeds/local 2>/dev/null)" ]; then
+            echo "feeds/local 为空, 跳过 SDK 拉取"
+            echo "sdk_root=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p sdk-stage
+          SDK_ROOT=$(bash build-config/scripts/build/fetch.sh \
+                       --url '${{ steps.urls.outputs.sdk_url }}' \
+                       --out sdk-stage)
+          echo "sdk_root=$SDK_ROOT" >> "$GITHUB_OUTPUT"
+          echo "SDK root: $SDK_ROOT"
+
+      - name: Build self-feed
+        id: self_feed
+        if: steps.fetch_sdk.outputs.sdk_root != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=$(bash build-config/scripts/build/build-self-feed.sh \
+                  --sdk '${{ steps.fetch_sdk.outputs.sdk_root }}' \
+                  --feeds-local-dir "$PWD/build-config/feeds/local" \
+                  --out "$PWD/local-feed")
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Append local repo to IB repositories
+        if: steps.self_feed.outputs.out != ''
+        shell: bash
+        run: |
+          bash build-config/scripts/build/append-repo.sh \
+            --ib-workdir '${{ steps.fetch_ib.outputs.ib_root }}' \
+            --local-feed '${{ steps.self_feed.outputs.out }}'
+
+      - name: Probe missing packages (sanity check)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash build-config/scripts/ib/probe-missing.sh \
+            --workdir '${{ steps.fetch_ib.outputs.ib_root }}' \
+            --device-dir "build-config/devices/${DEVICE}" \
+            --conf-dir   "build-config" \
+            --output     "${DEVICE}.missing.json" \
+            --conflicts  "${DEVICE}.conflicts.txt"
+
+          MISSING_N=$(jq 'length' "${DEVICE}.missing.json")
+          if [ "$MISSING_N" -gt 0 ]; then
+            echo "::error::${DEVICE}: probe-missing 报告 ${MISSING_N} 个缺包:"
+            jq -r '.[]' "${DEVICE}.missing.json" | sed 's/^/  - /'
+            echo "::error::解决方案: 加包到对应 preset, 或确认 IB 来源完整"
+            exit 1
+          fi
+          # conflicts 只 warn 不 fail (device packages.list 一般有 -pkg 排除)
+          if [ -s "${DEVICE}.conflicts.txt" ]; then
+            while IFS= read -r pkg; do
+              echo "::warning::${DEVICE}: conflict '$pkg' — 考虑加 '-${pkg}' 到 packages.list"
+            done < "${DEVICE}.conflicts.txt"
           fi
 
-      - name: Merge pool + fallback into unified package dir
+      - name: Build image
         shell: bash
         run: |
-          set -e
-          mkdir -p unified_repo
-          find pool-packages/ fallback-packages/ -type f \( -name "*.ipk" -o -name "*.apk" \) \
-            -exec cp -v {} unified_repo/ \; 2>/dev/null || true
-          echo "unified_repo: $(find unified_repo -maxdepth 1 -type f | wc -l | tr -d ' ') 个 ipk/apk"
-
-      - name: Inject merged repo into IB (ib/prepare-repo.sh)
-        shell: bash
-        run: |
-          bash build-config/scripts/ib/prepare-repo.sh \
-            --workdir ib-work \
-            --packages-dir unified_repo
-
-      - name: Build firmware image (ib/make-image.sh)
-        shell: bash
-        env:
-          DEVICE: ${{ inputs.device }}
-        run: |
-          set -e
+          set -euo pipefail
           source build-config/scripts/lib/extract-config.sh
           source build-config/scripts/lib/expand-packages.sh
-          DEVICE_DIR="build-config/devices/${DEVICE}"
-          PROFILE=$(extract_profile "$DEVICE_DIR/target.conf")
-          PACKAGES=$(expand_packages_for_ib "$DEVICE_DIR/packages.list" "build-config/common/presets")
+
+          DEV_DIR="build-config/devices/${DEVICE}"
+          PROFILE=$(extract_profile "$DEV_DIR/target.conf")
+          PACKAGES=$(expand_packages_for_ib "$DEV_DIR/packages.list" "build-config/common/presets")
 
           bash build-config/scripts/ib/make-image.sh \
-            --workdir ib-work \
-            --conf-dir "$GITHUB_WORKSPACE/build-config" \
-            --device "$DEVICE" \
-            --profile "$PROFILE" \
+            --workdir '${{ steps.fetch_ib.outputs.ib_root }}' \
+            --conf-dir "$PWD/build-config" \
+            --device   "$DEVICE" \
+            --profile  "$PROFILE" \
             --packages "$PACKAGES" \
-            --out bin-targets
+            --out      bin-targets
 
-      - name: Collect firmware outputs + checksums
+      - name: Collect + checksum
         shell: bash
-        env:
-          DEVICE: ${{ inputs.device }}
         run: |
-          output_dir="bin/outputs"
-          mkdir -p "${output_dir}"
-          find bin-targets/ -type f \( -name "*sysupgrade*" -o -name "*factory*" -o -name "*.manifest" -o -name "profiles.json" \) | while read -r file; do
-            filename=$(basename "$file")
-            cp -v "$file" "${output_dir}/${DEVICE}-${filename}"
-          done
-          bash build-config/scripts/ci/checksums.sh "${output_dir}"
-          mv "${output_dir}/sha256sums.txt" "${output_dir}/${DEVICE}-sha256sums.txt"
+          set -euo pipefail
+          mkdir -p bin/outputs
+          while IFS= read -r -d '' f; do
+            cp -v "$f" "bin/outputs/${DEVICE}-$(basename "$f")"
+          done < <(find bin-targets/ -type f \
+                    \( -name '*sysupgrade*' -o -name '*factory*' \
+                       -o -name '*.manifest' -o -name 'profiles.json' \) -print0)
+          bash build-config/scripts/ci/checksums.sh bin/outputs
+          mv bin/outputs/sha256sums.txt "bin/outputs/${DEVICE}-sha256sums.txt"
 
-      - name: Upload firmware artifact
+      - name: Upload firmware
         uses: actions/upload-artifact@v7
         with:
           name: firmware-${{ inputs.device }}
           path: bin/outputs/*
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 7

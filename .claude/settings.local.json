@@ -5,7 +5,9 @@
       "Bash(rmdir scripts/build)",
       "Bash(rmdir scripts/pool)",
       "Bash(git -C /Users/lrize/Code/openwrt-build status --short)",
-      "Bash(git -C /Users/lrize/Code/openwrt-build diff --stat HEAD)"
+      "Bash(git -C /Users/lrize/Code/openwrt-build diff --stat HEAD)",
+      "Bash(grep \"\\\\.list$\")",
+      "Bash(grep -v \"^$\")"
     ]
   }
 }

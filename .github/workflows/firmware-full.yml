@@ -1,11 +1,12 @@
 name: "[Rescue] Firmware — Full buildroot"
 
-# 救援轨入口 — 用完整 buildroot 出单设备固件 (不走 SDK/IB 增量路径)。
+# 救援轨入口 — 用完整 buildroot 出单设备固件 (绕开 IB).
 # 用途:
-#   - SDK/IB tar 出问题时绕过 (Base 轨坏掉的应急)
+#   - 上游 IB tar 出问题时应急
 #   - device-tree 改动冒烟测试
 #   - 深度调试 (V=s 整链路日志)
-# 仅 workflow_dispatch 触发, 不接受 push。
+#   - 未来修改 upstream 源码时 (走 K-Lrize/openwrt fork)
+# 仅 workflow_dispatch 触发, 不接受 push.
 
 on:
   workflow_dispatch:
@@ -79,9 +80,20 @@ jobs:
 
       - name: Prepare feeds + merge files layer
         run: |
-          bash "${CONFIG_REPO_DIR}/scripts/sdk/prepare.sh" \
-            --workdir . \
-            --device "${DEVICE}"
+          set -euo pipefail
+          # 1. 拼 feeds.conf: common + device 特有 (可选)
+          cp "${CONFIG_REPO_DIR}/common/feeds.conf" feeds.conf
+          if [ -f "${CONFIG_REPO_DIR}/devices/${DEVICE}/feeds.conf" ]; then
+              cat "${CONFIG_REPO_DIR}/devices/${DEVICE}/feeds.conf" >> feeds.conf
+          fi
+          # 2. 让 ./feeds/local 指向 build-config 仓库的 feeds/local
+          #    (common/feeds.conf 里写的是相对路径 src-link local ./feeds/local)
+          mkdir -p feeds
+          [ -e feeds/local ] || ln -s "${CONFIG_REPO_DIR}/feeds/local" feeds/local
+          # 3. 标准 feeds 拉取 + 安装
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          # 4. 合并 files 层
           bash "${CONFIG_REPO_DIR}/scripts/ib/merge-files.sh" "${DEVICE}"
 
       - name: Compose buildroot .config

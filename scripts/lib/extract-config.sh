@@ -87,6 +87,23 @@ extract_profile() {
         || true
 }
 
+# 输出 # ib-url: <URL> 注释里的 URL (target.conf 顶部),
+# 即拉 IB tar 的来源. 缺省时输出空串.
+extract_ib_url() {
+    local config="$1"
+    [ -f "$config" ] || return 0
+    grep -E '^#[[:space:]]*ib-url:[[:space:]]+' "$config" \
+        | head -1 | sed -E 's/^#[[:space:]]*ib-url:[[:space:]]+//' | awk '{print $1}' || true
+}
+
+# 输出 # sdk-url: <URL> 注释里的 URL.
+extract_sdk_url() {
+    local config="$1"
+    [ -f "$config" ] || return 0
+    grep -E '^#[[:space:]]*sdk-url:[[:space:]]+' "$config" \
+        | head -1 | sed -E 's/^#[[:space:]]*sdk-url:[[:space:]]+//' | awk '{print $1}' || true
+}
+
 # 输出 architecture（用于 ipk 命名/cache key），例如 "aarch64_cortex-a53"。
 #
 # 推导规则:
