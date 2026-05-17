@@ -5,7 +5,8 @@
 #       device packages.list 必须写 `-wpad-basic-mbedtls` 等排除老变体
 
 # 证书自动签发 (ACME / Let's Encrypt)
-acme
+acme-common
+acme-acmesh
 luci-app-acme
 
 # 健康检测 (网络丢包后自动重启 / 切线路)
