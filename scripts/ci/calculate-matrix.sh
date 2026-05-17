@@ -12,7 +12,7 @@
 #       仅动 devices/<X>/         → 只编 <X>
 #
 # 不再产出: target_matrix, device_meta, source_slug, pool_*, indexer_sdk_*
-# (per-device 数据由下游 job 自己读 devices/<dev>/target.conf 现取)
+# (per-device 数据由下游 job 自己读 devices/<dev>/.config 现取)
 
 set -euo pipefail
 

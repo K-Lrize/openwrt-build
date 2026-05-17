@@ -81,13 +81,9 @@ jobs:
       - name: Prepare feeds + merge files layer
         run: |
           set -euo pipefail
-          # 1. 拼 feeds.conf: common + device 特有 (可选)
+          # 1. feeds.conf: 用 common/feeds.conf (含 src-link local ./feeds/local)
           cp "${CONFIG_REPO_DIR}/common/feeds.conf" feeds.conf
-          if [ -f "${CONFIG_REPO_DIR}/devices/${DEVICE}/feeds.conf" ]; then
-              cat "${CONFIG_REPO_DIR}/devices/${DEVICE}/feeds.conf" >> feeds.conf
-          fi
           # 2. 让 ./feeds/local 指向 build-config 仓库的 feeds/local
-          #    (common/feeds.conf 里写的是相对路径 src-link local ./feeds/local)
           mkdir -p feeds
           [ -e feeds/local ] || ln -s "${CONFIG_REPO_DIR}/feeds/local" feeds/local
           # 3. 标准 feeds 拉取 + 安装
@@ -98,21 +94,9 @@ jobs:
 
       - name: Compose buildroot .config
         run: |
-          # 三段拼装:
-          #   1) target.conf       硬件 select + arch 注释 + 设备 select
-          #   2) base-config       全局开关 + kmod + 兜底库 (CONFIG_DEVEL 等已在内)
-          #   3) packages.list     展开后翻译: +pkg → CONFIG_PACKAGE_pkg=y
-          #                        (-pkg 在 full buildroot 阶段忽略 — 那是 IB
-          #                         `make image PACKAGES=` 语法, buildroot 用 .config)
-          cat "${CONFIG_REPO_DIR}/devices/${DEVICE}/target.conf" > .config
-          echo "" >> .config
-          cat "${CONFIG_REPO_DIR}/common/base-config" >> .config
-          echo "" >> .config
-          bash "${CONFIG_REPO_DIR}/scripts/lib/expand-packages.sh" \
-              "${CONFIG_REPO_DIR}/devices/${DEVICE}/packages.list" \
-              "${CONFIG_REPO_DIR}/common/presets" \
-            | awk '/^\+/ { sub(/^\+/, ""); printf "CONFIG_PACKAGE_%s=y\n", $0 }' \
-            >> .config
+          # 直接 cp 设备单一事实源 .config (target + 全局开关 + 包 + sing-box 子选项)
+          # 后面 `make defconfig` 会归一化并补全 dangling 项
+          cp "${CONFIG_REPO_DIR}/devices/${DEVICE}/.config" .config
 
       - name: Enable ccache + sccache + run defconfig
         run: |

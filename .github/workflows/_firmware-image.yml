@@ -2,9 +2,15 @@ name: "[Reusable] Firmware — Assemble image"
 
 # 组装一台设备的固件 image.
 # 流程:
-#   1. 读 device target.conf 拿 ib-url + sdk-url (workflow_dispatch 可覆盖)
+#   1. 读 device .config 拿 ib-url + sdk-url (workflow_dispatch 可覆盖)
 #   2. build/fetch.sh 拉 IB tar + 解压
-#   3. (如 feeds/local 非空) build/fetch.sh 拉 SDK + build/build-self-feed.sh 编自有包
+#   3. (如 feeds/local 非空) 准备 SDK 并编自有包:
+#       a. build/fetch.sh 拉 SDK
+#       b. local_self 写入 SDK feeds.conf 开头 (优先级最高, 覆盖上游同名包)
+#       c. feeds update -a + install -a
+#       d. 拼 .config + make defconfig
+#       e. 循环 make package/<pkg>/compile (失败 retry -j1 V=s)
+#       f. 收集产物 → local-feed/ + SDK 自带 apk mkndx 出 packages.adb
 #   4. build/append-repo.sh 把 file:// 自有 feed 追加到 IB repositories
 #   5. probe-missing sanity check (missing > 0 → 红)
 #   6. expand_packages_for_ib → IB PACKAGES=
@@ -53,21 +59,21 @@ jobs:
             ca-certificates file gawk gettext git jq libncurses-dev \
             perl python3 rsync signify-openbsd unzip wget xz-utils zlib1g zstd
 
-      - name: Resolve URLs from device target.conf
+      - name: Resolve URLs from device .config
         id: urls
         shell: bash
         run: |
           set -euo pipefail
           source build-config/scripts/lib/extract-config.sh
 
-          DEV_CONF="build-config/devices/${DEVICE}/target.conf"
+          DEV_CONF="build-config/devices/${DEVICE}/.config"
           [ -f "$DEV_CONF" ] || { echo "::error::$DEV_CONF 不存在"; exit 1; }
 
           IB_URL="${IB_URL_OVERRIDE:-$(extract_ib_url "$DEV_CONF")}"
           SDK_URL="${SDK_URL_OVERRIDE:-$(extract_sdk_url "$DEV_CONF")}"
 
-          [ -n "$IB_URL"  ] || { echo "::error::${DEVICE}: 无 ib-url (device 注释缺失且无 workflow input)"; exit 1; }
-          [ -n "$SDK_URL" ] || { echo "::error::${DEVICE}: 无 sdk-url"; exit 1; }
+          [ -n "$IB_URL"  ] || { echo "::error::${DEVICE}: 无 # ib-url (.config 注释缺失且无 workflow input)"; exit 1; }
+          [ -n "$SDK_URL" ] || { echo "::error::${DEVICE}: 无 # sdk-url"; exit 1; }
 
           echo "ib_url=$IB_URL"   >> "$GITHUB_OUTPUT"
           echo "sdk_url=$SDK_URL" >> "$GITHUB_OUTPUT"
@@ -104,23 +110,144 @@ jobs:
           echo "sdk_root=$SDK_ROOT" >> "$GITHUB_OUTPUT"
           echo "SDK root: $SDK_ROOT"
 
-      - name: Build self-feed
+      # ─── 编自有 feed (仅当 feeds/local 非空) ───────────────────────────
+      # 选包: 只编 "feeds/local 有源 ∩ 设备 .config 启用" 的包.
+      # feeds/local 是包池, 设备 .config 是 selection.
+      - name: Determine which local packages to build
+        id: pick_pkgs
+        if: steps.fetch_sdk.outputs.sdk_root != ''
+        shell: bash
+        env:
+          DEV_CONFIG: build-config/devices/${{ inputs.device }}/.config
+          LOCAL_DIR:  ${{ github.workspace }}/build-config/feeds/local
+        run: |
+          set -euo pipefail
+          pkgs=()
+          for d in "$LOCAL_DIR"/*/; do
+            pkg=$(basename "$d")
+            if grep -qE "^CONFIG_PACKAGE_${pkg}=[ym]$" "$DEV_CONFIG"; then
+              pkgs+=("$pkg")
+            else
+              echo "::warning::feeds/local/${pkg} 未在 ${DEV_CONFIG} 启用 (CONFIG_PACKAGE_${pkg}=y), 跳过编译"
+            fi
+          done
+          if [ "${#pkgs[@]}" -eq 0 ]; then
+            echo "无需编自维护包"
+            echo "list=" >> "$GITHUB_OUTPUT"
+          else
+            echo "将编: ${pkgs[*]}"
+            echo "list=${pkgs[*]}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # `local` 加 feeds.conf 头部 → 同名包优先用我们的. update -a 同步全 feed
+      # metadata, 然后 install -p local <pkg> 按需装: 只 symlink 我们的包 + 其
+      # 传递依赖 (feeds install 自动递归拉 DEPENDS), 不像 install -a 把全 1000+
+      # 包全 symlink → kconfig 解析只覆盖相关包, 不撞上游 SNAPSHOT 偶发的自循环
+      # Makefile bug (gnunet-messenger 等).
+      - name: Write SDK feeds.conf (local first)
+        if: steps.pick_pkgs.outputs.list != ''
+        shell: bash
+        env:
+          SDK: ${{ steps.fetch_sdk.outputs.sdk_root }}
+        run: |
+          set -euo pipefail
+          LOCAL_DIR="$PWD/build-config/feeds/local"
+          CONF="$SDK/feeds.conf"
+          [ -f "$CONF" ] || cp "$SDK/feeds.conf.default" "$CONF"
+          {
+            echo "src-link local $LOCAL_DIR"
+            grep -vE "^src-link[[:space:]]+local[[:space:]]" "$CONF" || true
+          } > "$CONF.tmp"
+          mv "$CONF.tmp" "$CONF"
+          echo "--- final feeds.conf ---"
+          cat "$CONF"
+
+      - name: Update feeds metadata + install selected packages (with deps)
+        if: steps.pick_pkgs.outputs.list != ''
+        shell: bash
+        working-directory: ${{ steps.fetch_sdk.outputs.sdk_root }}
+        env:
+          PKGS: ${{ steps.pick_pkgs.outputs.list }}
+        run: |
+          set -euo pipefail
+          ./scripts/feeds update -a
+          for pkg in $PKGS; do
+            echo "--- feeds install -p local $pkg (含传递依赖) ---"
+            ./scripts/feeds install -p local "$pkg"
+          done
+
+      # 设备 .config 是 SDK 编 feeds/local 的事实源:
+      #   - CONFIG_PACKAGE_sing-box=y           启用编译
+      #   - CONFIG_SING_BOX_WITH_TAILSCALE=y    包子选项 (主因 — 上游 sing-box.apk
+      #                                          这些 feature 默认 n, 我们要 y)
+      # 整份 cat 进 SDK .config, make defconfig 自动丢掉 dangling 项
+      # (CONFIG_TARGET_* / CONFIG_LUCI_LANG_* / CONFIG_DEVEL 等).
+      - name: Write SDK .config (cat device .config) + defconfig
+        if: steps.pick_pkgs.outputs.list != ''
+        shell: bash
+        env:
+          SDK: ${{ steps.fetch_sdk.outputs.sdk_root }}
+          DEV_CONFIG: build-config/devices/${{ inputs.device }}/.config
+        run: |
+          set -euo pipefail
+          cp "$DEV_CONFIG" "$SDK/.config"
+          (cd "$SDK" && make defconfig)
+          echo "--- 启用的 CONFIG_*SING_BOX* (确认子选项生效) ---"
+          grep -E '^CONFIG_(PACKAGE_sing-box|SING_BOX_)' "$SDK/.config" || true
+
+      - name: Compile selected local packages
+        if: steps.pick_pkgs.outputs.list != ''
+        shell: bash
+        working-directory: ${{ steps.fetch_sdk.outputs.sdk_root }}
+        env:
+          PKGS: ${{ steps.pick_pkgs.outputs.list }}
+        run: |
+          set -euo pipefail
+          JOBS=$(nproc)
+          for pkg in $PKGS; do
+            echo "--- package/$pkg/compile ---"
+            if ! make "package/$pkg/compile" -j"$JOBS"; then
+              echo "::warning::Compile $pkg failed; retrying single-threaded."
+              make "package/$pkg/compile" -j1 V=s
+            fi
+          done
+
+      # 收 local/ 下产物. local 在 feeds.conf 头部, 同名包以我们的为准, 产物路径
+      # 就一定在 bin/packages/<arch>/local/. 不用 `make package_index` — 它会触发
+      # 全量 kconfig, 撞上游 broken Makefile. 用 SDK 自带 apk mkndx 对小范围索引.
+      - name: Collect + index local feed
         id: self_feed
         if: steps.fetch_sdk.outputs.sdk_root != ''
         shell: bash
+        env:
+          SDK: ${{ steps.fetch_sdk.outputs.sdk_root }}
         run: |
           set -euo pipefail
-          OUT=$(bash build-config/scripts/build/build-self-feed.sh \
-                  --sdk '${{ steps.fetch_sdk.outputs.sdk_root }}' \
-                  --feeds-local-dir "$PWD/build-config/feeds/local" \
-                  --out "$PWD/local-feed")
+          OUT="$PWD/local-feed"
+          mkdir -p "$OUT"
+
+          while IFS= read -r d; do
+            find "$d" -maxdepth 1 -type f \( -name '*.apk' -o -name '*.ipk' \) \
+              -exec cp -v {} "$OUT/" \;
+          done < <(find "$SDK/bin/packages" -type d -name local)
+
+          if ! compgen -G "$OUT/*.apk" >/dev/null && ! compgen -G "$OUT/*.ipk" >/dev/null; then
+            echo "::error::No apk/ipk collected. SDK bin/packages tree:"
+            find "$SDK/bin/packages" -maxdepth 4 -type f \
+              \( -name '*.apk' -o -name '*.ipk' \) | head -50
+            exit 1
+          fi
+
+          APK="$SDK/staging_dir/host/bin/apk"
+          [ -x "$APK" ] || { echo "::error::$APK not found (SDK incomplete?)"; exit 1; }
+          (cd "$OUT" && "$APK" mkndx -o packages.adb ./*.apk)
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
 
-      - name: Append local repo to IB repositories
+      - name: Add local repo to IB repositories (prepend, 同名包优先)
         if: steps.self_feed.outputs.out != ''
         shell: bash
         run: |
-          bash build-config/scripts/build/append-repo.sh \
+          bash build-config/scripts/build/add-repo.sh \
             --ib-workdir '${{ steps.fetch_ib.outputs.ib_root }}' \
             --local-feed '${{ steps.self_feed.outputs.out }}'
 
@@ -142,10 +269,10 @@ jobs:
             echo "::error::解决方案: 加包到对应 preset, 或确认 IB 来源完整"
             exit 1
           fi
-          # conflicts 只 warn 不 fail (device packages.list 一般有 -pkg 排除)
+          # conflicts 只 warn 不 fail (device .config 一般有 # CONFIG_PACKAGE_xxx is not set 排除)
           if [ -s "${DEVICE}.conflicts.txt" ]; then
             while IFS= read -r pkg; do
-              echo "::warning::${DEVICE}: conflict '$pkg' — 考虑加 '-${pkg}' 到 packages.list"
+              echo "::warning::${DEVICE}: conflict '$pkg' — 考虑加 '# CONFIG_PACKAGE_${pkg} is not set' 到 device .config"
             done < "${DEVICE}.conflicts.txt"
           fi
 
@@ -154,11 +281,13 @@ jobs:
         run: |
           set -euo pipefail
           source build-config/scripts/lib/extract-config.sh
-          source build-config/scripts/lib/expand-packages.sh
 
-          DEV_DIR="build-config/devices/${DEVICE}"
-          PROFILE=$(extract_profile "$DEV_DIR/target.conf")
-          PACKAGES=$(expand_packages_for_ib "$DEV_DIR/packages.list" "build-config/common/presets")
+          DEV_CONFIG="build-config/devices/${DEVICE}/.config"
+          PROFILE=$(extract_profile "$DEV_CONFIG")
+          PACKAGES=$(bash build-config/scripts/lib/config-to-ib-packages.sh "$DEV_CONFIG")
+
+          echo "PROFILE: $PROFILE"
+          echo "PACKAGES: $PACKAGES"
 
           bash build-config/scripts/ib/make-image.sh \
             --workdir '${{ steps.fetch_ib.outputs.ib_root }}' \

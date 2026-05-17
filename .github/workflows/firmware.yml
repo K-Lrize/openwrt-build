@@ -1,7 +1,7 @@
 name: "[Build] Firmware"
 
 # 主轨 — 拉 IB / 编自有 feed / 装包出 image.
-# 每个 device 自己声明 IB / SDK URL (devices/<dev>/target.conf 顶部
+# 每个 device 自己声明 IB / SDK URL (devices/<dev>/.config 顶部
 # `# ib-url:` + `# sdk-url:` 注释), 来源可以是上游 snapshot / release /
 # 自建 release asset. 所有 URL 都走 curl 拉, 来源等价.
 #

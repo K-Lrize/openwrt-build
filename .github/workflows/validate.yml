@@ -1,9 +1,8 @@
 name: "[CI] Validate configuration"
 
 # CI 轨 — 静态 lint, 不出固件.
-#   - presets/*.list 包名 / kmod 守门 / 重复检测
-#   - devices/*/target.conf 的 # arch / # ib-url / # sdk-url / CONFIG_TARGET_*
-#   - devices/*/packages.list 的 @preset / +pkg / -pkg 语法 + 引用完整性
+#   - devices/*/.config 的 # arch / # ib-url / # sdk-url + CONFIG_TARGET_*
+#   - feeds/local/<pkg> 必须至少被某个 device 启用 (orphan 检查)
 #
 # 动态校验 (probe-missing make manifest dry-run) 在 firmware.yml 内, 那一步本身
 # 就是必走的, 不需要单独的 validate workflow 再做一遍.
@@ -11,32 +10,26 @@ name: "[CI] Validate configuration"
 on:
   push:
     paths:
-      - 'common/presets/**'
-      - 'common/base-config'
       - 'common/feeds.conf'
-      - 'devices/**/target.conf'
-      - 'devices/**/packages.list'
-      - 'devices/**/feeds.conf'
-      - 'scripts/ci/lint-presets.sh'
+      - 'devices/**/.config'
+      - 'feeds/local/**'
+      - 'scripts/ci/lint-config.sh'
       - 'scripts/lib/**'
   pull_request:
     paths:
-      - 'common/presets/**'
-      - 'common/base-config'
       - 'common/feeds.conf'
-      - 'devices/**/target.conf'
-      - 'devices/**/packages.list'
-      - 'devices/**/feeds.conf'
-      - 'scripts/ci/lint-presets.sh'
+      - 'devices/**/.config'
+      - 'feeds/local/**'
+      - 'scripts/ci/lint-config.sh'
       - 'scripts/lib/**'
   workflow_dispatch:
 
 jobs:
-  Lint-Presets:
-    name: Lint presets + devices
+  Lint-Config:
+    name: Lint device .config
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - run: bash scripts/ci/lint-presets.sh
+      - run: bash scripts/ci/lint-config.sh

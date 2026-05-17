@@ -18,9 +18,9 @@
 #
 # 用法:
 #   ib/probe-missing.sh \
-#       --workdir <IB_ROOT>          必填,已解压(且 prepare-repo 完毕)的 IB 根
+#       --workdir <IB_ROOT>          必填,已解压(且 add-repo 完毕)的 IB 根
 #       --device-dir <DEV_DIR>       必填,devices/<dev>/ 目录路径
-#                                    脚本会自动读 target.conf + packages.list
+#                                    脚本会自动读 devices/<dev>/.config
 #       --output <FILE>              必填,JSON 数组:missing 包名清单
 #       [--conflicts <FILE>]         可选,文本清单:冲突包名 (去版本)
 #
@@ -34,10 +34,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/extract-config.sh
 source "$SCRIPT_DIR/../lib/extract-config.sh"
-
-SCRIPT_DIR_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib"
-# shellcheck source=../lib/expand-packages.sh
-source "$SCRIPT_DIR_LIB/expand-packages.sh"
 
 WORKDIR=""
 DEVICE_DIR=""
@@ -80,15 +76,13 @@ OUTPUT="$(cd "$(dirname "$OUTPUT")" && pwd)/$(basename "$OUTPUT")"
 [ -n "$CONFLICTS" ] && { mkdir -p "$(dirname "$CONFLICTS")"; CONFLICTS="$(cd "$(dirname "$CONFLICTS")" && pwd)/$(basename "$CONFLICTS")"; }
 
 [ -f "$WORKDIR/Makefile"         ] || { echo "::error::probe-missing: $WORKDIR 不像 IB 根 (缺 Makefile)" >&2; exit 1; }
-[ -f "$DEVICE_DIR/target.conf"   ] || { echo "::error::probe-missing: $DEVICE_DIR/target.conf 不存在" >&2; exit 1; }
-[ -f "$DEVICE_DIR/packages.list" ] || { echo "::error::probe-missing: $DEVICE_DIR/packages.list 不存在" >&2; exit 1; }
-[ -d "$CONF_DIR/common/presets"  ] || { echo "::error::probe-missing: $CONF_DIR/common/presets/ 不存在" >&2; exit 1; }
+[ -f "$DEVICE_DIR/.config" ] || { echo "::error::probe-missing: $DEVICE_DIR/.config 不存在" >&2; exit 1; }
 
-# 从 target.conf 提 PROFILE,从 packages.list 通过 expand_packages 展开 + 翻译成 IB PACKAGES 串
-PROFILE=$(extract_profile "$DEVICE_DIR/target.conf")
-PACKAGES=$(expand_packages_for_ib "$DEVICE_DIR/packages.list" "$CONF_DIR/common/presets")
+# 从设备 .config 提 PROFILE + 翻译成 IB PACKAGES 字符串
+PROFILE=$(extract_profile "$DEVICE_DIR/.config")
+PACKAGES=$(bash "$SCRIPT_DIR/../lib/config-to-ib-packages.sh" "$DEVICE_DIR/.config")
 
-[ -n "$PROFILE" ] || { echo "::error::probe-missing: 无法从 $DEVICE_DIR/target.conf 提取 PROFILE" >&2; exit 1; }
+[ -n "$PROFILE" ] || { echo "::error::probe-missing: 无法从 $DEVICE_DIR/.config 提取 PROFILE" >&2; exit 1; }
 
 echo "::group::probe-missing: make manifest PROFILE=$PROFILE"
 echo "PROFILE:  $PROFILE"
