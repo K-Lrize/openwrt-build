@@ -99,11 +99,17 @@ make manifest PROFILE="$PROFILE" PACKAGES="$PACKAGES" \
 rc=$?
 set -e
 
+echo "::group::IB 当前 repositories (apk add 的源)"
+cat "$WORKDIR/repositories" 2>/dev/null || true
+echo "::endgroup::"
+
 echo "::group::make manifest exit code: $rc"
-echo "--- stdout 前 20 行 (apk query 结果或为空):"
-head -20 "$tmp/manifest.txt" 2>/dev/null || true
-echo "--- stderr 中的错误片段:"
-grep -E '\(no such package\)|conflicts:|unable to select' "$tmp/err.log" 2>/dev/null \
+echo "--- stdout 前 30 行 (apk query 结果或为空):"
+head -30 "$tmp/manifest.txt" 2>/dev/null || true
+echo "--- stderr 完整内容 (≤ 200 行):"
+head -200 "$tmp/err.log" 2>/dev/null || true
+echo "--- stderr 关键错误片段汇总:"
+grep -E '\(no such package\)|conflicts:|unable to select|UNTRUSTED|fetch|http' "$tmp/err.log" 2>/dev/null \
     | head -30 || echo "(stderr 中无 apk 关键错误)"
 echo "::endgroup::"
 

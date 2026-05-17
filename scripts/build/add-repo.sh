@@ -45,6 +45,10 @@ REPO="$WORKDIR/repositories"
 
 [ -f "$REPO" ] || { echo "::error::add-repo: $REPO 不存在 (24.10+ apk IB 才有)" >&2; exit 1; }
 
+# IB 24.10+ apk 制式: repositories 每行 **直接指 packages.adb 文件路径**,
+# 不是目录 URL. 上游样子:
+#   https://downloads.openwrt.org/snapshots/packages/<arch>/base/packages.adb
+# 所以我们追加的也是 file:// 直指 packages.adb (或 index.json).
 INDEX="$LOCAL_FEED/packages.adb"
 if [ ! -f "$INDEX" ]; then
     if [ -f "$LOCAL_FEED/index.json" ]; then
@@ -66,5 +70,5 @@ mv "$REPO.new" "$REPO"
 
 echo "add-repo: $REPO"
 echo "  prepend: $LINE"
-echo "--- final repositories (前 5 行) ---"
-head -5 "$REPO"
+echo "--- 完整 repositories ---"
+cat "$REPO"

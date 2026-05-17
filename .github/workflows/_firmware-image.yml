@@ -275,7 +275,7 @@ jobs:
           if [ "$MISSING_N" -gt 0 ]; then
             echo "::error::${DEVICE}: probe-missing 报告 ${MISSING_N} 个缺包:"
             jq -r '.[]' "${DEVICE}.missing.json" | sed 's/^/  - /'
-            echo "::error::解决方案: 加包到对应 preset, 或确认 IB 来源完整"
+            echo "::error::解决方案: 检查 device .config 包名拼写; 看 probe-missing 上方完整 stderr 排查 IB repositories / 网络问题"
             exit 1
           fi
           # conflicts 只 warn 不 fail (device .config 一般有 # CONFIG_PACKAGE_xxx is not set 排除)
