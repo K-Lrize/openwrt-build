@@ -99,11 +99,10 @@ done
 echo "::endgroup::"
 [ $RC -eq 0 ] || exit 1
 
-echo "::group::build-self-feed: make package_index"
-(cd "$SDK" && make package_index)
-echo "::endgroup::"
-
-# 收集 local_self feed 产物 (含 SDK 原生生成的 packages.adb)
+# 收集 local_self feed 产物 → OUT
+# 不用 `make package_index` — 它会触发 prereq 全量 kconfig 解析, 撞上游 SNAPSHOT
+# 偶发的 Makefile 自循环 bug (gnunet-messenger / strongswan-isakmp 等) 全崩.
+# 直接拿 SDK 自带 apk binary 对 OUT 跑 mkndx, 只索引我们的 1-3 个包.
 echo "::group::build-self-feed: 收集 → $OUT"
 SRC_PKGS_DIR="$SDK/bin/packages"
 [ -d "$SRC_PKGS_DIR" ] || { echo "::error::build-self-feed: $SRC_PKGS_DIR 不存在" >&2; exit 1; }
@@ -114,15 +113,28 @@ for arch_dir in "$SRC_PKGS_DIR"/*/; do
     feed_dir="$arch_dir/local_self"
     [ -d "$feed_dir" ] || continue
     echo "  $arch/local_self → $OUT/"
-    find "$feed_dir" -maxdepth 1 -type f \
-        \( -name '*.apk' -o -name '*.ipk' \
-           -o -name 'packages.adb' -o -name 'index.json' \
-           -o -name 'Packages*' \) \
+    find "$feed_dir" -maxdepth 1 -type f \( -name '*.apk' -o -name '*.ipk' \) \
         -exec cp -n {} "$OUT/" \;
     found=1
 done
-
 [ $found -eq 1 ] || { echo "::error::build-self-feed: 未在 bin/packages/*/local_self/ 找到产物" >&2; exit 1; }
+echo "::endgroup::"
+
+echo "::group::build-self-feed: 生成 packages.adb (SDK 自带 apk)"
+HOST_APK="$SDK/staging_dir/host/bin/apk"
+if [ ! -x "$HOST_APK" ]; then
+    echo "::error::build-self-feed: $HOST_APK 不存在 — SDK 残缺?" >&2
+    exit 1
+fi
+if compgen -G "$OUT/*.apk" >/dev/null; then
+    (cd "$OUT" && "$HOST_APK" mkndx -o packages.adb ./*.apk)
+    echo "  生成: $OUT/packages.adb ($(du -h "$OUT/packages.adb" | awk '{print $1}'))"
+elif compgen -G "$OUT/*.ipk" >/dev/null; then
+    echo "::warning::build-self-feed: 仅有 ipk (老 SDK?), append-repo 走 opkg src/gz 模式" >&2
+else
+    echo "::error::build-self-feed: $OUT 下无 apk/ipk" >&2
+    exit 1
+fi
 echo "::endgroup::"
 
 echo "build-self-feed: 完成, OUT=$OUT"
